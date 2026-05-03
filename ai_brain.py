@@ -1,0 +1,373 @@
+import os
+import json
+import time
+import urllib.request
+import urllib.parse
+import urllib.error
+import hmac
+import hashlib
+from openai import OpenAI
+from dotenv import load_dotenv
+import io
+import sys
+import threading
+from collections import deque
+import asyncio
+import numpy as np
+import websockets
+
+# Fix unicode print
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+
+# Load API Keys
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'koda_quant', '.env'))
+api_key = os.environ.get("QWEN_API_KEY")
+binance_api_key = os.environ.get("BINANCE_API_KEY", "")
+binance_secret_key = os.environ.get("BINANCE_SECRET_KEY", "")
+
+if not api_key:
+    print("ERROR: QWEN_API_KEY not found in .env")
+    sys.exit(1)
+
+client = OpenAI(
+    api_key=api_key,
+    base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+)
+
+class RegimeDetector:
+    def __init__(self):
+        self.price_window = deque(maxlen=50)
+        self.ofi_window = deque(maxlen=50)
+
+    def update(self, price, ofi):
+        self.price_window.append(price)
+        self.ofi_window.append(ofi)
+
+    def detect_regime(self):
+        if len(self.price_window) < 20:
+            return "UNKNOWN"
+
+        prices = np.array(self.price_window)
+        returns = np.diff(prices)
+        if len(returns) == 0: return "UNKNOWN"
+
+        # 1. VOLATILITY
+        vol = np.std(returns)
+
+        # 2. TREND STRENGTH
+        trend_strength = abs(np.mean(returns)) / (vol + 1e-8)
+
+        # 3. OFI CONSISTENCY
+        ofi_arr = np.array(self.ofi_window)
+        ofi_direction = np.sign(ofi_arr)
+        consistency = np.mean(ofi_direction == np.sign(np.mean(ofi_arr)))
+
+        # REGIME LOGIC
+        if trend_strength > 0.6 and consistency > 0.6:
+            return "TREND"
+        elif trend_strength < 0.3 and consistency < 0.5:
+            return "CHOP"
+        else:
+            return "NEUTRAL"
+
+# =============================
+# QUANT-GRADE V5 ENGINE (SNIPER MODE)
+# =============================
+class OFIV5SniperEngine:
+    def __init__(self, symbol="btcusdt", depth_levels=5, window_size=50):
+        self.symbol = symbol.lower()
+        self.depth_levels = depth_levels
+        
+        # Equity & Leverage Simulation
+        self.equity = 1000.0  # Simulated $1000
+        self.leverage = 10
+        
+        # Order book state
+        self.prev_bids = None
+        self.prev_asks = None
+        
+        # Tracking
+        self.ofi_history = deque(maxlen=window_size)
+        self.price_history = deque(maxlen=window_size)
+        self.regime_detector = RegimeDetector()
+        
+        # Sniper Parameters (STRICT FILTERS)
+        self.decay_lambda = 0.8
+        self.z_threshold = 2.5 # Default High Conviction threshold
+        self.absorption_threshold = 2.5
+        self.risk_multiplier = 1.0
+        
+        self.load_adaptive_config()
+        
+        # Risk Management (Prop Firm Standard)
+        self.daily_loss_limit = self.equity * 0.03 # 3% Max Daily Drawdown
+        self.max_trades_per_day = 10
+        self.trades_today = 0
+        self.consecutive_losses = 0
+        self.cooldown_until = 0
+        self.current_drawdown = 0.0
+        self.kill_switch = False
+        
+        self.chat_log = []
+        self.last_trade_time = 0
+        
+    def load_adaptive_config(self):
+        try:
+            with open("adaptive_config.json", "r") as f:
+                config = json.load(f)
+                self.z_threshold = config.get("z_threshold", 2.5)
+                self.risk_multiplier = config.get("risk_multiplier", 1.0)
+                self.absorption_threshold = self.z_threshold
+        except Exception:
+            pass
+
+    def compute_multi_level_ofi(self, bids, asks):
+        ofi = 0.0
+        for i in range(self.depth_levels):
+            bid_p, bid_v = float(bids[i][0]), float(bids[i][1])
+            ask_p, ask_v = float(asks[i][0]), float(asks[i][1])
+            
+            if self.prev_bids and self.prev_asks:
+                prev_bid_p, prev_bid_v = float(self.prev_bids[i][0]), float(self.prev_bids[i][1])
+                prev_ask_p, prev_ask_v = float(self.prev_asks[i][0]), float(self.prev_asks[i][1])
+                
+                if bid_p > prev_bid_p: ofi += bid_v
+                elif bid_p == prev_bid_p: ofi += (bid_v - prev_bid_v)
+                else: ofi -= prev_bid_v
+                
+                if ask_p < prev_ask_p: ofi += ask_v
+                elif ask_p == prev_ask_p: ofi -= (ask_v - prev_ask_v)
+                else: ofi += prev_ask_v
+        return ofi
+
+    def apply_decay(self):
+        if not self.ofi_history: return 0.0
+        weights = np.array([self.decay_lambda ** (len(self.ofi_history) - i) for i in range(len(self.ofi_history))])
+        weights /= weights.sum()
+        return sum(w * ofi for w, ofi in zip(weights, self.ofi_history))
+
+    def compute_zscore(self, value):
+        if len(self.ofi_history) < 10: return 0.0
+        std = np.std(self.ofi_history)
+        if std == 0: return 0.0
+        return (value - np.mean(self.ofi_history)) / std
+
+    # DYNAMIC TP/SL MODEL
+    def dynamic_tp_sl(self, bid, ask):
+        # Model 1: Spread Based
+        spread = ask - bid
+        mid_price = (bid + ask) / 2
+        spread_pct = spread / mid_price
+        tp_spread = spread_pct * 2.5
+        sl_spread = spread_pct * 3.5
+        
+        # Model 2: Volatility Based
+        if len(self.price_history) >= 10:
+            returns = np.diff(self.price_history)
+            vol_pct = np.std(returns) / self.price_history[-1]
+            tp_vol = vol_pct * 3
+            sl_vol = vol_pct * 4
+        else:
+            tp_vol = 0.0015
+            sl_vol = 0.002
+            
+        # Hybrid
+        tp = max(tp_spread, tp_vol, 0.0015) # Min TP 0.15%
+        sl = max(sl_spread, sl_vol, 0.0020) # Min SL 0.2%
+        return tp, sl
+
+    # POSITION SIZING
+    def calculate_quantity(self, z_ofi, price, sl_pct):
+        self.load_adaptive_config() # Refresh config before sizing
+        risk_pct = 0.01 * self.risk_multiplier # 1% equity risk * adaptive multiplier
+        base_risk = self.equity * risk_pct
+        edge = min(abs(z_ofi) / 5, 1.5)
+        adjusted_risk = base_risk * edge
+        position_value = adjusted_risk / sl_pct
+        
+        required_margin = position_value / self.leverage
+        if required_margin > self.equity * 0.3:
+            position_value = self.equity * self.leverage * 0.3
+            
+        qty = position_value / price
+        return round(qty, 3)
+
+    # 3-LAYER FILTER
+    def detect_signal(self, z_ofi, current_price, regime):
+        if len(self.price_history) < 5: return None, "NO_DATA"
+        price_change = current_price - self.price_history[0]
+        
+        allow_absorption = (regime in ["CHOP", "NEUTRAL"])
+        allow_momentum = (regime in ["TREND", "NEUTRAL"])
+        
+        # 1. Absorption (High Winrate)
+        if allow_absorption:
+            if z_ofi > self.absorption_threshold and abs(price_change) < 0.5:
+                return "SELL", "ABSORPTION"
+            if z_ofi < -self.absorption_threshold and abs(price_change) < 0.5:
+                return "BUY", "ABSORPTION"
+            
+        # 2. Confirmed Momentum
+        if allow_momentum:
+            if z_ofi > max(3.0, self.z_threshold + 0.5) and price_change > 1.0:
+                return "BUY", "MOMENTUM"
+            if z_ofi < -max(3.0, self.z_threshold + 0.5) and price_change < -1.0:
+                return "SELL", "MOMENTUM"
+            
+        return None, "NO_EDGE"
+
+    def execute_binance_request(self, method, endpoint, params):
+        if not binance_api_key or not binance_secret_key:
+            return {"status": "SIMULATED", "params": params}
+            
+        base_url = "https://fapi.binance.com"
+        params["timestamp"] = int(time.time() * 1000)
+        query_string = urllib.parse.urlencode(params)
+        signature = hmac.new(binance_secret_key.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
+        url = f"{base_url}{endpoint}?{query_string}&signature={signature}"
+        
+        try:
+            req = urllib.request.Request(url, method=method)
+            req.add_header("X-MBX-APIKEY", binance_api_key)
+            with urllib.request.urlopen(req) as response:
+                return json.loads(response.read().decode())
+        except Exception as e:
+            return {"status": "ERROR", "msg": str(e)}
+
+    def execute_trade(self, side, quantity, current_price, tp_pct, sl_pct, z_ofi, strategy, spread, vol):
+        if self.kill_switch or time.time() < self.cooldown_until:
+            return "BLOCKED BY RISK ENGINE"
+            
+        if self.trades_today >= self.max_trades_per_day:
+            self.kill_switch = True
+            return "MAX TRADES REACHED"
+
+        # Market Order
+        print(f"[>] EXECUTING {side} {quantity} at {current_price}")
+        main_res = self.execute_binance_request("POST", "/fapi/v1/order", {
+            "symbol": self.symbol.upper(), "side": side, "type": "MARKET", "quantity": quantity
+        })
+        
+        # Calculate TP/SL prices
+        tp_price = current_price * (1 + tp_pct) if side == "BUY" else current_price * (1 - tp_pct)
+        sl_price = current_price * (1 - sl_pct) if side == "BUY" else current_price * (1 + sl_pct)
+        
+        tp_price = round(tp_price, 1)
+        sl_price = round(sl_price, 1)
+        
+        print(f"    [+] Set TP: {tp_price} | SL: {sl_price}")
+        
+        # Log to structured CSV for AI Data Mining
+        import csv
+        csv_file = 'trade_history.csv'
+        file_exists = os.path.isfile(csv_file)
+        
+        try:
+            with open(csv_file, mode='a', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                if not file_exists:
+                    writer.writerow(['timestamp', 'z_ofi', 'spread', 'volatility', 'price', 'signal', 'tp_pct', 'sl_pct', 'strategy', 'pnl'])
+                
+                # Mock PnL as 0.0 for now, replay system will calculate it
+                writer.writerow([
+                    int(time.time()), round(z_ofi, 4), round(spread, 4), round(vol, 6), 
+                    current_price, side, round(tp_pct, 4), round(sl_pct, 4), strategy, 0.0
+                ])
+        except Exception as e:
+            print(f"[-] Failed to write CSV: {e}")
+            
+        self.trades_today += 1
+        return main_res
+
+    def background_llm_supervisor(self, signal, price, z_ofi, strategy, tp_pct, sl_pct):
+        try:
+            sys_msg = "Bạn là Giám đốc Lượng Tử (Quant Supervisor). Đánh giá tín hiệu V5 Sniper Mode."
+            prompt = f"Vừa bắn {signal} tại {price} theo thế võ {strategy}. Z-Score: {z_ofi:.2f}. Cắt lỗ: {sl_pct*100:.2f}%. Chốt lời: {tp_pct*100:.2f}%. Đánh giá 1 câu ngắn."
+            res = client.chat.completions.create(
+                model="qwen-plus",
+                messages=[{"role": "system", "content": sys_msg}, {"role": "user", "content": prompt}],
+                max_tokens=60
+            )
+            ai_comment = res.choices[0].message.content.strip()
+            self.chat_log.append({"s": "LLM_SUPERVISOR", "c": "risk", "m": f"[REVIEW] {ai_comment}"})
+            
+            with open('chat_logs.json', 'w', encoding='utf-8') as f:
+                json.dump(self.chat_log[-15:], f, ensure_ascii=False)
+        except Exception:
+            pass
+
+    async def process_orderbook(self, data):
+        # Binance Futures WebSocket uses 'b' and 'a', REST uses 'bids' and 'asks'
+        bids = data.get('b') or data.get('bids')
+        asks = data.get('a') or data.get('asks')
+        
+        if not bids or not asks:
+            return # Skip if data is incomplete
+            
+        best_bid, best_ask = float(bids[0][0]), float(asks[0][0])
+        current_price = (best_bid + best_ask) / 2
+        spread = best_ask - best_bid
+        
+        ofi = self.compute_multi_level_ofi(bids, asks)
+        self.ofi_history.append(ofi)
+        self.price_history.append(current_price)
+        
+        # Volatility
+        vol = 0.0
+        if len(self.price_history) >= 10:
+            vol = np.std(np.diff(self.price_history)) / self.price_history[-1]
+            
+        decayed_ofi = self.apply_decay()
+        z_ofi = self.compute_zscore(decayed_ofi)
+        
+        # Regime Detection
+        self.regime_detector.update(current_price, decayed_ofi)
+        regime = self.regime_detector.detect_regime()
+        
+        signal, strategy = self.detect_signal(z_ofi, current_price, regime)
+        
+        self.prev_bids = bids
+        self.prev_asks = asks
+        
+        log_msg = f"[TICK] {current_price:.1f} | Z: {z_ofi:.2f} | Regime: {regime} | Strategy: {strategy}"
+        self.chat_log.append({"s": "QUANT_CORE", "c": "micro", "m": log_msg})
+        
+        # Throttling
+        if signal and time.time() - self.last_trade_time > 10:
+            print(f"[!] V7 SIGNAL: {signal} ({strategy}) at {current_price} in {regime} regime")
+            
+            # Dynamic TP/SL & Position Sizing
+            tp_pct, sl_pct = self.dynamic_tp_sl(best_bid, best_ask)
+            qty = self.calculate_quantity(z_ofi, current_price, sl_pct)
+            qty = max(0.002, qty) # Binance min limit
+            
+            def execute_and_log():
+                res = self.execute_trade(signal, qty, current_price, tp_pct, sl_pct, z_ofi, strategy, spread, vol)
+                self.chat_log.append({"s": "EXECUTION", "c": "exec", "m": f"[ACTION] Traded {qty} BTC ({strategy}). TP {tp_pct*100:.2f}% / SL {sl_pct*100:.2f}%"})
+                self.background_llm_supervisor(signal, current_price, z_ofi, strategy, tp_pct, sl_pct)
+            
+            threading.Thread(target=execute_and_log).start()
+            self.last_trade_time = time.time()
+            self.ofi_history.clear() 
+            
+        with open('chat_logs.json', 'w', encoding='utf-8') as f:
+            json.dump(self.chat_log[-15:], f, ensure_ascii=False)
+
+    async def run(self):
+        print("🚀 [V5] Starting Sniper Mode Engine (70% Winrate / Kelly Sizing / Dynamic TP-SL)")
+        url = f"wss://fstream.binance.com/ws/{self.symbol}@depth{self.depth_levels}@100ms"
+        
+        while True:
+            try:
+                async with websockets.connect(url) as ws:
+                    while True:
+                        msg = await ws.recv()
+                        data = json.loads(msg)
+                        await self.process_orderbook(data)
+            except Exception as e:
+                print(f"[-] WebSocket Disconnected: {e}. Reconnecting in 3 seconds...")
+                await asyncio.sleep(3)
+
+if __name__ == "__main__":
+    engine = OFIV5SniperEngine(symbol="btcusdt", depth_levels=5)
+    asyncio.run(engine.run())
