@@ -106,7 +106,7 @@ async function pollAILogs() {
 setInterval(pollAILogs, 3000);
 
 // Tab Switching Logic
-function switchTab(tabId) {
+function switchTab(tabId, event) {
     // Hide all tabs
     document.getElementById('tab-room').style.display = 'none';
     document.getElementById('tab-chart').style.display = 'none';
