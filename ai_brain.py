@@ -84,9 +84,12 @@ class OFIV5SniperEngine:
         self.symbol = symbol.lower()
         self.depth_levels = depth_levels
         
-        # Equity & Leverage
-        self.equity = 75.0  # Live USDT balance (updated by User Data Stream)
-        self.leverage = 10
+        # Load production config (Codex-verified thresholds)
+        self.live_cfg = self._load_live_config()
+        
+        # Equity & Leverage (Phase A defaults)
+        self.equity = 75.0  # Updated by User Data Stream
+        self.leverage = self.live_cfg.get('leverage', 5)
         
         # Order book state
         self.prev_bids = None
@@ -99,19 +102,30 @@ class OFIV5SniperEngine:
         
         # Sniper Parameters (STRICT FILTERS)
         self.decay_lambda = 0.8
-        self.z_threshold = 2.5 # Default High Conviction threshold
+        self.z_threshold = 2.5
         self.absorption_threshold = 2.5
         self.risk_multiplier = 1.0
         
         self.load_adaptive_config()
         
-        # Risk Management (Prop Firm Standard)
-        self.daily_loss_limit = self.equity * 0.03 # 3% Max Daily Drawdown
-        self.max_trades_per_day = 10
+        # Risk Management (Codex Production Thresholds)
+        self.daily_loss_limit = self.equity * self.live_cfg.get('daily_loss_stop_pct', 0.025)
+        self.max_trades_per_day = self.live_cfg.get('max_trades_per_day', 6)
+        self.max_consecutive_losses = self.live_cfg.get('max_consecutive_losses', 3)
+        self.spread_guard_pct = self.live_cfg.get('spread_guard_pct', 0.0012)
+        self.min_rr_ratio = self.live_cfg.get('min_reward_risk_ratio', 1.2)
+        self.max_open_positions = self.live_cfg.get('max_open_positions', 1)
+        self.cooldown_after_loss = self.live_cfg.get('cooldown_after_loss_sec', 900)
+        self.cooldown_after_2_losses = self.live_cfg.get('cooldown_after_2_losses_sec', 3600)
+        self.risk_per_trade_pct = self.live_cfg.get('risk_per_trade_pct', 0.005)
+        self.max_position_margin_pct = self.live_cfg.get('max_position_margin_pct', 0.20)
+        
         self.trades_today = 0
         self.consecutive_losses = 0
         self.cooldown_until = 0
         self.current_drawdown = 0.0
+        self.daily_realized_loss = 0.0
+        self.open_positions = 0
         self.kill_switch = False
         
         self.chat_log = []
@@ -123,6 +137,18 @@ class OFIV5SniperEngine:
         self.macro_adapter.start()
         self.risk_manager = PortfolioRiskManager()
         self.last_trade_time = 0
+    
+    def _load_live_config(self):
+        try:
+            with open('live_config.json', 'r') as f:
+                cfg = json.load(f)
+                print(f"[CONFIG] Loaded live_config.json — Phase {cfg.get('_phase', '?')}, Leverage {cfg.get('leverage', '?')}x")
+                return cfg
+        except FileNotFoundError:
+            print("[CONFIG] live_config.json not found, using safe defaults.")
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"[CONFIG] live_config.json corrupted: {e}. Using safe defaults.")
+        return {'leverage': 5, 'risk_per_trade_pct': 0.005, 'max_trades_per_day': 6}
         
     def load_adaptive_config(self):
         try:
@@ -191,16 +217,19 @@ class OFIV5SniperEngine:
 
     # POSITION SIZING
     def calculate_quantity(self, z_ofi, price, sl_pct):
-        self.load_adaptive_config() # Refresh config before sizing
-        risk_pct = 0.01 * self.risk_multiplier # 1% equity risk * adaptive multiplier
+        self.load_adaptive_config()
+        # Use Codex-recommended risk per trade (Phase A: 0.5%)
+        risk_pct = self.risk_per_trade_pct * self.risk_multiplier
         base_risk = self.equity * risk_pct
         edge = min(abs(z_ofi) / 5, 1.5)
         adjusted_risk = base_risk * edge
         position_value = adjusted_risk / sl_pct
         
+        # Codex: Max position margin <= 20% equity
         required_margin = position_value / self.leverage
-        if required_margin > self.equity * 0.3:
-            position_value = self.equity * self.leverage * 0.3
+        max_margin = self.equity * self.max_position_margin_pct
+        if required_margin > max_margin:
+            position_value = max_margin * self.leverage
             
         qty = position_value / price
         return round(qty, 3)
@@ -400,7 +429,38 @@ class OFIV5SniperEngine:
 
         # Throttling
         if signal and time.time() - self.last_trade_time > 10:
-            print(f"[!] V7 SIGNAL: {signal} ({strategy}) at {current_price} in {regime} regime")
+            print(f"[!] V8 SIGNAL: {signal} ({strategy}) at {current_price} in {regime} regime")
+            
+            # GUARD 1: Spread guard (Codex)
+            spread_pct = spread / current_price if current_price > 0 else 1
+            if spread_pct > self.spread_guard_pct:
+                self.chat_log.append({"s": "RISK_ENGINE", "c": "risk", "m": f"[SPREAD GUARD] Spread {spread_pct*100:.3f}% > limit {self.spread_guard_pct*100:.2f}%. Skipped."})
+                with open('chat_logs.json', 'w', encoding='utf-8') as f:
+                    json.dump(self.chat_log[-15:], f, ensure_ascii=False)
+                return
+            
+            # GUARD 2: Max open positions (Codex: 1 for small account)
+            if self.open_positions >= self.max_open_positions:
+                self.chat_log.append({"s": "RISK_ENGINE", "c": "risk", "m": f"[MAX POS] Already {self.open_positions} open. Max: {self.max_open_positions}."})
+                with open('chat_logs.json', 'w', encoding='utf-8') as f:
+                    json.dump(self.chat_log[-15:], f, ensure_ascii=False)
+                return
+            
+            # GUARD 3: Daily loss circuit breaker (Codex: -2.5% equity)
+            if self.daily_realized_loss >= self.daily_loss_limit:
+                self.kill_switch = True
+                self.chat_log.append({"s": "RISK_ENGINE", "c": "risk", "m": f"[DAILY STOP] Loss ${self.daily_realized_loss:.2f} >= limit ${self.daily_loss_limit:.2f}. Bot paused."})
+                with open('chat_logs.json', 'w', encoding='utf-8') as f:
+                    json.dump(self.chat_log[-15:], f, ensure_ascii=False)
+                return
+            
+            # GUARD 4: Consecutive losses cooldown (Codex)
+            if self.consecutive_losses >= self.max_consecutive_losses:
+                self.cooldown_until = time.time() + self.cooldown_after_2_losses
+                self.chat_log.append({"s": "RISK_ENGINE", "c": "risk", "m": f"[LOSS STREAK] {self.consecutive_losses} consecutive losses. Cooldown {self.cooldown_after_2_losses/60:.0f}min."})
+                with open('chat_logs.json', 'w', encoding='utf-8') as f:
+                    json.dump(self.chat_log[-15:], f, ensure_ascii=False)
+                return
             
             # Sprint B: risk manager veto
             risk_decision = self.risk_manager.evaluate(self.recent_pnls, self.equity, self.current_drawdown)
@@ -412,12 +472,23 @@ class OFIV5SniperEngine:
 
             # Dynamic TP/SL & Position Sizing
             tp_pct, sl_pct = self.dynamic_tp_sl(best_bid, best_ask)
+            
+            # GUARD 5: Min Reward/Risk ratio (Codex: >= 1.2)
+            rr_ratio = tp_pct / sl_pct if sl_pct > 0 else 0
+            if rr_ratio < self.min_rr_ratio:
+                self.chat_log.append({"s": "RISK_ENGINE", "c": "risk", "m": f"[RR FILTER] R:R {rr_ratio:.2f} < min {self.min_rr_ratio}. Skipped."})
+                with open('chat_logs.json', 'w', encoding='utf-8') as f:
+                    json.dump(self.chat_log[-15:], f, ensure_ascii=False)
+                return
+            
             qty = self.calculate_quantity(z_ofi, current_price, sl_pct)
             qty = max(0.002, qty) # Binance min limit
             
             def execute_and_log():
                 res = self.execute_trade(signal, qty, current_price, tp_pct, sl_pct, z_ofi, strategy, spread, vol)
-                self.chat_log.append({"s": "EXECUTION", "c": "exec", "m": f"[ACTION] Traded {qty} BTC ({strategy}). TP {tp_pct*100:.2f}% / SL {sl_pct*100:.2f}%"})
+                if isinstance(res, dict) and 'orderId' in res:
+                    self.open_positions += 1
+                self.chat_log.append({"s": "EXECUTION", "c": "exec", "m": f"[ACTION] Traded {qty} BTC ({strategy}). TP {tp_pct*100:.2f}% / SL {sl_pct*100:.2f}% | R:R {rr_ratio:.1f}"})
                 self.background_llm_supervisor(signal, current_price, z_ofi, strategy, tp_pct, sl_pct)
             
             threading.Thread(target=execute_and_log).start()
@@ -474,12 +545,19 @@ class OFIV5SniperEngine:
                             if order.get('X') == 'FILLED' and pnl != 0:
                                 print(f"\n[$$$] TRADE CLOSED! Realized PnL: {pnl}\n")
                                 self.log_realized_pnl(pnl)
-                                # P0 FIX: Sync live state to risk manager
+                                # Sync live state to risk manager
                                 self.recent_pnls.append(pnl)
                                 self.equity += pnl
+                                self.open_positions = max(0, self.open_positions - 1)
                                 if pnl < 0:
                                     self.current_drawdown += abs(pnl)
+                                    self.daily_realized_loss += abs(pnl)
                                     self.consecutive_losses += 1
+                                    # Codex: cooldown after loss
+                                    if self.consecutive_losses == 1:
+                                        self.cooldown_until = time.time() + self.cooldown_after_loss
+                                    elif self.consecutive_losses >= 2:
+                                        self.cooldown_until = time.time() + self.cooldown_after_2_losses
                                 else:
                                     self.current_drawdown = max(0, self.current_drawdown - pnl)
                                     self.consecutive_losses = 0
