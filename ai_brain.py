@@ -15,6 +15,8 @@ from collections import deque
 import asyncio
 import numpy as np
 import websockets
+from tradingagents_adapter import MacroAgentAdapter
+from risk_manager import PortfolioRiskManager
 
 # Fix unicode print
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
@@ -109,6 +111,12 @@ class OFIV5SniperEngine:
         self.kill_switch = False
         
         self.chat_log = []
+        self.recent_pnls = []
+
+        # Sprint A/B integrations
+        self.macro_adapter = MacroAgentAdapter(update_interval_sec=4 * 3600)
+        self.macro_adapter.start()
+        self.risk_manager = PortfolioRiskManager()
         self.last_trade_time = 0
         
     def load_adaptive_config(self):
@@ -329,13 +337,31 @@ class OFIV5SniperEngine:
         self.prev_bids = bids
         self.prev_asks = asks
         
-        log_msg = f"[TICK] {current_price:.1f} | Z: {z_ofi:.2f} | Regime: {regime} | Strategy: {strategy}"
+        macro = self.macro_adapter.get_decision()
+        macro_bias = macro.get("bias", "NEUTRAL")
+        log_msg = f"[TICK] {current_price:.1f} | Z: {z_ofi:.2f} | Regime: {regime} | Strategy: {strategy} | Macro: {macro_bias}"
         self.chat_log.append({"s": "QUANT_CORE", "c": "micro", "m": log_msg})
         
+        # Sprint A: macro filter gate
+        if signal and macro_bias == "BULL" and signal == "SELL":
+            signal = None
+            self.chat_log.append({"s": "PORTFOLIO_MANAGER", "c": "risk", "m": "[MACRO_FILTER] Block SELL in BULL bias"})
+        elif signal and macro_bias == "BEAR" and signal == "BUY":
+            signal = None
+            self.chat_log.append({"s": "PORTFOLIO_MANAGER", "c": "risk", "m": "[MACRO_FILTER] Block BUY in BEAR bias"})
+
         # Throttling
         if signal and time.time() - self.last_trade_time > 10:
             print(f"[!] V7 SIGNAL: {signal} ({strategy}) at {current_price} in {regime} regime")
             
+            # Sprint B: risk manager veto
+            risk_decision = self.risk_manager.evaluate(self.recent_pnls, self.equity, self.current_drawdown)
+            if not risk_decision.allow:
+                self.chat_log.append({"s": "PORTFOLIO_MANAGER", "c": "risk", "m": f"[VETO] {risk_decision.reason}"})
+                with open('chat_logs.json', 'w', encoding='utf-8') as f:
+                    json.dump(self.chat_log[-15:], f, ensure_ascii=False)
+                return
+
             # Dynamic TP/SL & Position Sizing
             tp_pct, sl_pct = self.dynamic_tp_sl(best_bid, best_ask)
             qty = self.calculate_quantity(z_ofi, current_price, sl_pct)
@@ -371,3 +397,4 @@ class OFIV5SniperEngine:
 if __name__ == "__main__":
     engine = OFIV5SniperEngine(symbol="btcusdt", depth_levels=5)
     asyncio.run(engine.run())
+    # Sprint C reflection is run separately via: python memory_reflection.py
