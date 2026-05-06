@@ -3,6 +3,31 @@ setInterval(() => {
     document.getElementById('sys-time').innerText = new Date().toLocaleTimeString('en-US', { hour12: false }) + ' ICT';
 }, 1000);
 
+
+
+// Live BTC ticker (real Binance REST market data)
+const btcLastEl = document.getElementById('btc-last');
+const btcChangeEl = document.getElementById('btc-change');
+
+async function pollTicker24h() {
+    try {
+        const res = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT');
+        const data = await res.json();
+        const last = Number(data.lastPrice || 0);
+        const change = Number(data.priceChangePercent || 0);
+
+        btcLastEl.textContent = last ? `$${last.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '--';
+        btcChangeEl.textContent = Number.isFinite(change) ? `${change.toFixed(2)}%` : '--';
+        btcChangeEl.classList.remove('green');
+        btcChangeEl.classList.remove('red');
+        btcChangeEl.classList.add(change >= 0 ? 'green' : 'red');
+    } catch (err) {
+        console.error('Ticker fetch failed:', err);
+    }
+}
+
+pollTicker24h();
+setInterval(pollTicker24h, 3000);
 // Connect to REAL Binance WebSocket for Live Order Book (DOM)
 const domData = document.getElementById('dom-data');
 const ws = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@depth10@100ms');
@@ -106,7 +131,7 @@ async function pollAILogs() {
 setInterval(pollAILogs, 3000);
 
 // Tab Switching Logic
-function switchTab(tabId) {
+function switchTab(tabId, event) {
     // Hide all tabs
     document.getElementById('tab-room').style.display = 'none';
     document.getElementById('tab-chart').style.display = 'none';

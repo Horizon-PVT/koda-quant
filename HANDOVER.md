@@ -1,7 +1,7 @@
 # KODA QUANT HFT - BÀN GIAO DỰ ÁN (HANDOVER)
 
-## Trạng thái Hệ thống (V7)
-Dự án đã được nâng cấp từ một Chatbot Agent thô sơ lên thành hệ thống **Prop Firm MFT (Medium Frequency Trading) Engine**, hoàn thành 100% các lõi quan trọng nhất:
+## Trạng thái Hệ thống (V8 - Active)
+Dự án đã được nâng cấp từ một Chatbot Agent thô sơ lên thành hệ thống **Prop Firm HFT (High-Frequency Trading) Engine**, hoàn thành 100% các lõi quan trọng nhất:
 
 1. **V4 OFI Engine:** Sử dụng Order Flow Imbalance đa tầng (5 levels) quét qua WebSocket 100ms.
 2. **V5 Sniper Mode:** Chỉ bắn lệnh khi Z-Score > 2.5. Sử dụng thuật toán Kelly Position Sizing và Dynamic TP/SL (dựa trên Spread & Volatility).
@@ -25,3 +25,14 @@ Dự án đã được nâng cấp từ một Chatbot Agent thô sơ lên thành
 ---
 > [!NOTE]
 > Ghi chú cho AI kế nhiệm: Đọc `conversation_history.txt` và file này để bắt nhịp ngay lập tức. Sếp đang dùng tư duy của một Quỹ Giao Dịch Chuyên Nghiệp. Không được tư vấn lệch hướng sang các chỉ báo tĩnh (Candlesticks, RSI, MACD).
+
+
+## V8 Update (2026-05-05)
+- Dashboard đã kéo dữ liệu thị trường thật từ Binance REST `ticker/24hr` (BTC last price + 24h change) để giám sát thời gian thực ngay trên top-nav.
+- DOM vẫn lấy real-time WebSocket 100ms từ Binance như các bản trước.
+
+
+## Cách mở Dashboard local
+1. Chạy `python start_dashboard.py` (hoặc `npm start`, hoặc double-click `start_dashboard.bat` trên Windows).
+2. Mở trình duyệt: `http://localhost:8000/index.html`.
+3. Nếu cổng 8000 bận, server sẽ tự nhảy sang cổng kế tiếp (vd: 8001) và in link mới trong terminal.
