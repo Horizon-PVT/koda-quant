@@ -33,6 +33,6 @@ Dự án đã được nâng cấp từ một Chatbot Agent thô sơ lên thành
 
 
 ## Cách mở Dashboard local
-1. Chạy `python start_dashboard.py` (hoặc `npm start`).
+1. Chạy `python start_dashboard.py` (hoặc `npm start`, hoặc double-click `start_dashboard.bat` trên Windows).
 2. Mở trình duyệt: `http://localhost:8000/index.html`.
-3. Nếu vẫn lỗi `ERR_CONNECTION_REFUSED`, nghĩa là server chưa chạy hoặc bị app khác chiếm port 8000.
+3. Nếu cổng 8000 bận, server sẽ tự nhảy sang cổng kế tiếp (vd: 8001) và in link mới trong terminal.
