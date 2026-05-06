@@ -1,147 +1,143 @@
-# KODA QUANT V8 - COMPLETE SYSTEM HANDOVER
-> **Last Updated:** 2026-05-06 | **Status:** LIVE (Production) | **Author:** Antigravity AI + Human Operator
+# KODA QUANT V8.5 — PRODUCTION HANDOVER
+> **Status**: ✅ ALL SAFEGUARDS VERIFIED — APPROVED FOR PAPER TRADING PHASE A
+> **Last Audit**: 2026-05-06 by Antigravity + Codex cross-review (5 rounds)
+> **Repo**: https://github.com/Horizon-PVT/koda-quant
 
 ---
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    KODA QUANT V8 ENGINE                      │
-│                                                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌───────────────────┐  │
-│  │  ai_brain.py │  │ Dashboard    │  │ Adaptive Engine   │  │
-│  │  (CORE)      │  │ (Web UI)     │  │ (Self-Learning)   │  │
-│  │              │  │              │  │                   │  │
-│  │ • OFI Engine │  │ • index.html │  │ • adaptive_engine │  │
-│  │ • Regime Det │  │ • app.js     │  │ • analyze_logs    │  │
-│  │ • Execution  │  │ • style.css  │  │ • memory_reflect  │  │
-│  │ • UserData WS│  │ • API proxy  │  │                   │  │
-│  └──────┬───────┘  └──────┬───────┘  └─────────┬─────────┘  │
-│         │                 │                     │            │
-│  ┌──────▼─────────────────▼─────────────────────▼─────────┐  │
-│  │              Binance Futures API                        │  │
-│  │  • Market WS (100ms depth)  • User Data Stream         │  │
-│  │  • REST (account/positions) • Order Execution           │  │
-│  └────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 📁 File Structure & Purpose
-
-| File | Purpose | Status |
-|------|---------|--------|
-| `ai_brain.py` | **Core engine.** WebSocket OFI scanner, signal detection, order execution, User Data Stream tracker, adaptive hook. Entry point: `python ai_brain.py` | ✅ LIVE |
-| `start_dashboard.py` | **HTTP server + API proxy.** Serves dashboard UI and proxies `/api/portfolio` to Binance securely (HMAC-signed). Port 8001. | ✅ LIVE |
-| `index.html` | Dashboard UI — Live Portfolio panel, Order Book DOM, AI Agent chat room, TradingView chart tab. | ✅ LIVE |
-| `app.js` | Frontend JS — polls `/api/portfolio` every 3s, renders live balance/positions, WebSocket DOM feed, agent chat polling. | ✅ LIVE |
-| `style.css` | Dark-theme quant dashboard styling with CSS custom properties. | ✅ LIVE |
-| `adaptive_engine.py` | Self-learning module. Reads `trade_history.csv`, recalculates winrate, adjusts `z_threshold` and `risk_multiplier`. Outputs `adaptive_config.json`. | ✅ LIVE |
-| `kronos_adapter.py` | Regime detection adapter (TREND/CHOP/NEUTRAL classification). | ✅ LIVE |
-| `tradingagents_adapter.py` | Macro agent — background thread polling macro bias (BULL/BEAR/NEUTRAL) to filter signals. | ✅ LIVE |
-| `risk_manager.py` | Portfolio risk manager — veto layer blocking trades during drawdown or consecutive losses. | ✅ LIVE |
-| `memory_reflection.py` | End-of-day summary generator. Reads `trade_history.csv` → writes `trading_memory.md`. Run separately. | ✅ Ready |
-| `analyze_logs.py` | Post-hoc statistical analysis. Run after collecting 50+ trades to find optimal Sniper Zones. | ✅ Ready |
-| `trade_history.csv` | Live trade log with 10 columns: timestamp, z_ofi, spread, volatility, price, signal, tp_pct, sl_pct, strategy, pnl. | Auto-generated |
-| `chat_logs.json` | Rolling 15-message agent chat log consumed by dashboard. | Auto-generated |
-| `adaptive_config.json` | Current adaptive parameters (z_threshold, risk_multiplier, winrate). | Auto-generated |
-| `macro_filter.json` | Current macro bias state from TradingAgents adapter. | Auto-generated |
-| `.env` | API keys: `QWEN_API_KEY`, `BINANCE_API_KEY`, `BINANCE_SECRET_KEY`. **NEVER commit this.** | ✅ Configured |
-| `requirements.txt` | Python dependencies: openai, pandas, python-dotenv, numpy, websockets. | ✅ Created |
-| `setup.bat` | One-click install + launch script for Windows. | ✅ Created |
-| `conversation_history.txt` | Full dev history from V1→V7 (238KB). | Reference only |
-
----
-
-## 🔧 Engine Versions (Evolution History)
-
-| Version | Feature | Key Innovation |
-|---------|---------|----------------|
-| V1-V3 | Basic chatbot + candlestick signals | Prototype, no edge |
-| V4 | Multi-level OFI Engine | 5-level order book imbalance via WebSocket 100ms |
-| V5 | Sniper Mode | Z-Score > 2.5 filter, Kelly sizing, Dynamic TP/SL |
-| V6 | Adaptive Learning | Auto-tune z_threshold & risk_multiplier from CSV winrate |
-| V7 | Regime Detection | TREND/CHOP/NEUTRAL classification, strategy gating |
-| **V8** | **Live Production** | **User Data Stream, real PnL tracking, API proxy dashboard, Macro filter, Risk veto, Self-learning loop** |
-
----
-
-## 🧠 Signal Generation Pipeline
-
-```
-Raw Order Book (100ms) 
-    → Multi-Level OFI (5 depths)
-    → Exponential Decay Weighting (λ=0.8)
-    → Z-Score Calculation
-    → Regime Detection (TREND/CHOP/NEUTRAL)
-    → Signal Filter:
-        • Absorption: Z > 2.5 AND price flat → Counter-trade
-        • Momentum: Z > 3.0 AND price moving → Trend-follow
-    → Macro Gate (BULL blocks SELL, BEAR blocks BUY)
-    → Risk Manager Veto (drawdown/consecutive loss check)
-    → Dynamic TP/SL (spread-based + volatility-based hybrid)
-    → Kelly Position Sizing (1% equity risk * adaptive multiplier)
-    → Execution (Binance Futures Market Order)
-    → User Data Stream catches fill → logs real PnL to CSV
-    → Every 5 fills → Adaptive Engine recalculates and reloads config
+┌─────────────────────────────────────────────────────────┐
+│                    KODA QUANT V8.5                       │
+├─────────────────────────────────────────────────────────┤
+│  5 Async Tasks (asyncio.gather)                         │
+│  ├── task1: Order Book WebSocket (100ms depth5)         │
+│  ├── task2: ListenKey Keepalive (50min loop)            │
+│  ├── task3: User Data Stream (PnL + ACCOUNT_UPDATE)     │
+│  ├── task4: Position Sync REST (60s fallback)           │
+│  └── task5: Daily Reset Loop (UTC 00:00)                │
+├─────────────────────────────────────────────────────────┤
+│  Signal Pipeline                                        │
+│  OFI 5-Level → Decay → Z-Score → Regime → Signal       │
+│  → Macro Filter → 5 Guards → Risk Manager → Execute    │
+├─────────────────────────────────────────────────────────┤
+│  Execution Pipeline                                     │
+│  MARKET Entry (idempotent) → Slippage Check             │
+│  → TP/SL Bracket Orders → Emergency Close if fail       │
+├─────────────────────────────────────────────────────────┤
+│  Self-Learning                                          │
+│  Realized PnL → CSV → Adaptive Engine (every 5 trades)  │
+│  → Adjust z_threshold + risk_multiplier                 │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🔑 Security & Credentials
+## Production Safeguards (Codex-Verified)
 
-- **API Key Permissions:** Read + Enable Futures ONLY (no Spot, no Withdrawal)
-- **IP Whitelist:** Restricted to operator's IP on Binance side
-- **Dashboard Proxy:** `start_dashboard.py` signs requests server-side — Secret Key never exposed to browser
-- **`.gitignore`** excludes `.env` from version control
+### 5 Pre-Trade Guards
+| # | Guard | Threshold | Action |
+|---|-------|-----------|--------|
+| 1 | Spread Guard | > 0.12% | Skip trade |
+| 2 | Max Open Positions | 1 | Skip trade |
+| 3 | Daily Loss Circuit Breaker | -2.5% equity ($1.88) | Kill switch ON |
+| 4 | Consecutive Loss Cooldown | 3 losses → 60min pause | Cooldown timer |
+| 5 | Min R:R Ratio | < 1.2 | Skip trade |
 
----
+### Execution Guards
+| Guard | Description |
+|-------|-------------|
+| Order Validation | Check `orderId` in response before proceeding |
+| Slippage Guard | If fill slippage > 0.08% → close immediately |
+| avgPrice=0 Handling | Flag as UNKNOWN_FILL, skip slippage check |
+| TP/SL Bracket | TAKE_PROFIT_MARKET + STOP_MARKET on Binance |
+| Bracket Fail Safety | Both TP+SL fail → Emergency MARKET close |
+| Order Idempotency | `newClientOrderId` prevents double-entry |
+| Log Differentiation | [FILLED] vs [REJECTED] vs [BLOCKED] vs [FAILED] |
 
-## 🚀 How to Run
-
-### Quick Start (Windows)
-```bash
-# Option 1: One-click
-double-click setup.bat
-
-# Option 2: Manual
-cd "C:\Users\ADMIN\.gemini\antigravity\scratch\multi-agent-high-frequency-trading-(hft)"
-pip install -r requirements.txt
-python start_dashboard.py    # Terminal 1 — Dashboard on :8001
-python ai_brain.py           # Terminal 2 — HFT Engine
-python memory_reflection.py  # Terminal 3 — (Optional) End-of-day summary
-```
-
-### Dashboard Access
-- **Local:** `http://localhost:8001/index.html`
-- **Features:** Live BTC price, Order Book DOM, AI Agent chat, Live Portfolio (balance + positions + PnL)
-
----
-
-## ⚠️ Known Limitations & TODO
-
-| Item | Status | Notes |
-|------|--------|-------|
-| Bot stops when PC shuts down | ❌ Pending | Solution: Deploy to VPS (Alibaba Cloud server ready at 47.250.174.44) |
-| IP whitelist must match runtime IP | ⚠️ Manual | If deploying to VPS, update Binance API IP whitelist to VPS public IP |
-| `trade_history.csv` PnL column | ⚠️ Partial | Real PnL filled via User Data Stream; older mock entries show 0.0 |
-| Bayesian Winrate (full) | 🔮 Future | Current adaptive is rule-based. Full Bayesian requires more data |
-| Heatmap 3D visualization | 🔮 Future | Planned for V9 after sufficient CSV data collected |
-| Auto-retrain ML model | 🔮 Future | Need 500+ trades for statistical significance |
+### Risk State Tracking
+| State | Source |
+|-------|--------|
+| `equity` | Updated by User Data Stream (realized PnL) |
+| `open_positions` | ACCOUNT_UPDATE event + REST sync every 60s |
+| `daily_realized_loss` | Accumulated from negative PnL events |
+| `consecutive_losses` | Incremented on loss, reset on win |
+| `cooldown_until` | 15min after 1 loss, 60min after 2+ losses |
 
 ---
 
-## 💰 Current Account Status (2026-05-06)
-- **Binance Account:** Tom_Horizon
-- **Futures Wallet:** ~75 USDT (pending transfer from Funding → USDⓈ-M)
-- **Leverage:** 10x
-- **Max Daily Drawdown:** 3% of equity
-- **Max Trades/Day:** 10
-- **Risk per Trade:** 1% of equity × adaptive multiplier
+## Phase A Config (live_config.json)
+
+| Parameter | Value |
+|-----------|-------|
+| Leverage | 5x |
+| Risk/trade | 0.5% ($0.38) |
+| Max margin/position | 20% equity ($15) |
+| Max trades/day | 6 |
+| Max consecutive losses | 3 |
+| Daily loss stop | -2.5% ($1.88) |
+| Spread guard | > 0.12% |
+| Slippage guard | > 0.08% |
+| Min R:R ratio | 1.2 |
+| Max open positions | 1 |
+
+### Phase Progression
+- **Phase A** (Week 1): 5x, 0.5% risk — current
+- **Phase B** (Week 2-3): 5x, 0.75% risk — requires 100 settled trades + 14 days no breach
+- **Phase C**: 10x — requires 1 month stable log
 
 ---
 
-> [!NOTE]
-> **For AI successors (Codex, etc.):** This system uses ORDER FLOW microstructure analysis, NOT traditional indicators (RSI, MACD, Bollinger). Do not suggest adding lagging indicators. The edge comes from reading raw order book pressure at 100ms resolution. Read `conversation_history.txt` for full architectural rationale from V1→V8.
+## File Map
+
+| File | Purpose |
+|------|---------|
+| `ai_brain.py` | Core engine: OFI, signals, execution, risk, WebSocket |
+| `live_config.json` | Production thresholds (Phase A/B/C) |
+| `adaptive_engine.py` | Self-learning z_threshold + risk_multiplier tuning |
+| `adaptive_config.json` | Current adaptive parameters (auto-generated) |
+| `tradingagents_adapter.py` | Macro bias adapter (Kronos + safe fallback) |
+| `kronos_adapter.py` | Binance OHLCV macro regime detection |
+| `risk_manager.py` | Portfolio-level risk evaluation |
+| `start_dashboard.py` | Dashboard server (127.0.0.1, file blocking, API proxy) |
+| `index.html` / `style.css` / `app.js` | Dashboard UI (XSS-safe, auto-reconnect) |
+| `trade_history.csv` | Trade log (auto-generated) |
+| `chat_logs.json` | Real-time agent communication log |
+| `.env` | API keys (never committed) |
+
+---
+
+## Security
+
+- Dashboard binds `127.0.0.1` only
+- Sensitive files blocked from HTTP: `.env`, `trade_history.csv`, `adaptive_config.json`
+- All chat rendering uses `textContent` (zero innerHTML for runtime data)
+- API signing via HMAC-SHA256 server-side
+- WebSocket exponential backoff (3s → 6s → 12s → cap 30s)
+
+---
+
+## Audit Trail (V8.1 → V8.5.1)
+
+| Version | Changes | Reviewer |
+|---------|---------|----------|
+| V8.1 | TP/SL bracket orders, order validation, XSS fix, dashboard hardening | Antigravity |
+| V8.2 | Exponential backoff, zero innerHTML, typed exceptions | Codex P2 |
+| V8.3 | 5 guards, phased config, spread/RR/daily stop | Codex thresholds |
+| V8.4 | ACCOUNT_UPDATE position sync + REST fallback | Codex critical bug |
+| V8.5 | Slippage guard, daily reset UTC, order idempotency | Codex pre-live |
+| V8.5.1 | avgPrice edge-case, log differentiation | Codex final notes |
+
+---
+
+## GO LIVE Checklist
+
+- [ ] Paper trading 14+ days, 100+ settled trades
+- [ ] Profit factor > 1.2, max drawdown < 5%
+- [ ] Verify API key: Futures Only, no Withdraw, IP whitelisted
+- [ ] Test kill switch + emergency close with dry-run
+- [ ] Confirm TP/SL visible on Binance after entry
+- [ ] Clock synced (NTP), WebSocket reconnect stable
+- [ ] Telegram/Discord alerts for errors and risk breaches
+- [ ] Start live with 0.25-0.5% risk, increase only after 1 week stable

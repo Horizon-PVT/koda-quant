@@ -1,7 +1,7 @@
 {
   "bias": "NEUTRAL",
-  "confidence": 0.554,
-  "forecast_return": -0.00108,
+  "confidence": 0.544,
+  "forecast_return": -0.00087,
   "horizon": "4x15m",
   "symbol": "BTCUSDT",
   "interval": "15m",
@@ -9,7 +9,7 @@
   "pred_len": 4,
   "max_risk_multiplier": 1.0,
   "source": "HEURISTIC_OHLCV",
-  "updated_at": 1778048009,
-  "expires_at": 1778051609,
+  "updated_at": 1778048529,
+  "expires_at": 1778052129,
   "reason": "Kronos dependencies not active; used deterministic OHLCV momentum/volatility fallback."
 }
