@@ -1,3 +1,27 @@
+﻿=== KODA QUANT V8.5 FINAL REVIEW (commit 5bbb5c2) ===
+
+Da pass V8.4 READY FOR PAPER TRADING. V8.5 them 3 fix cuoi Codex yeu cau:
+
+1. SLIPPAGE GUARD: Sau khi entry filled, check avgPrice vs expected price.
+   Neu slippage > 0.08% thi dong position ngay lap tuc. Tim trong execute_trade().
+
+2. DAILY RESET LOOP: Reset trades_today, daily_realized_loss, kill_switch,
+   consecutive_losses, cooldown_until tai UTC 00:00 moi ngay.
+   Tim daily_reset_loop() va task5 trong main().
+
+3. ORDER IDEMPOTENCY: Moi entry dung newClientOrderId = koda_{timestamp}_{uuid8}
+   de tranh double-entry khi retry. Tim trong execute_trade().
+
+Kiem tra:
+- Slippage guard co check avgPrice tu response va close neu vuot nguong khong?
+- daily_reset_loop co tinh dung so giay den UTC 00:00 va reset tat ca counter khong?
+- newClientOrderId co duoc gui trong entry order params khong?
+- main() co gather du 5 task (run, keepalive, user_data, pos_sync, daily_reset) khong?
+- Con thieu gi truoc khi GO LIVE Phase A (paper trading) khong?
+
+Neu tat ca OK: "V8.5 ALL SAFEGUARDS VERIFIED - APPROVED FOR PAPER TRADING PHASE A".
+
+=== FILE: ai_brain.py ===
 import os
 import json
 import time
@@ -21,7 +45,7 @@ from risk_manager import PortfolioRiskManager
 # Fix unicode print
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
 
-# Load API Keys — try local .env first, then fallback to koda_quant path
+# Load API Keys â€” try local .env first, then fallback to koda_quant path
 from pathlib import Path
 _ROOT = Path(__file__).resolve().parent
 load_dotenv(_ROOT / ".env")
@@ -142,7 +166,7 @@ class OFIV5SniperEngine:
         try:
             with open('live_config.json', 'r') as f:
                 cfg = json.load(f)
-                print(f"[CONFIG] Loaded live_config.json — Phase {cfg.get('_phase', '?')}, Leverage {cfg.get('leverage', '?')}x")
+                print(f"[CONFIG] Loaded live_config.json â€” Phase {cfg.get('_phase', '?')}, Leverage {cfg.get('leverage', '?')}x")
                 return cfg
         except FileNotFoundError:
             print("[CONFIG] live_config.json not found, using safe defaults.")
@@ -300,24 +324,16 @@ class OFIV5SniperEngine:
             return main_res
         
         # Slippage guard: check actual fill price vs expected
-        raw_avg = main_res.get('avgPrice', '0')
-        fill_price = float(raw_avg) if raw_avg and float(raw_avg) > 0 else 0
-        if fill_price == 0:
-            # Edge case: avgPrice missing/zero — flag as unknown fill, skip slippage check
-            print(f"    [?] avgPrice unavailable, marking UNKNOWN_FILL. Proceeding with caution.")
-            self.chat_log.append({"s": "RISK_ENGINE", "c": "risk", "m": "[UNKNOWN_FILL] avgPrice=0 from exchange. Slippage check skipped."})
-            fill_price = current_price  # Use expected price as fallback
-            slippage = 0
-        else:
-            slippage = abs(fill_price - current_price) / current_price
+        fill_price = float(main_res.get('avgPrice', current_price))
+        slippage = abs(fill_price - current_price) / current_price
         slippage_limit = self.live_cfg.get('slippage_guard_pct', 0.0008)
         if slippage > slippage_limit:
-            print(f"    [!] SLIPPAGE {slippage*100:.4f}% > limit {slippage_limit*100:.2f}% — closing position immediately!")
+            print(f"    [!] SLIPPAGE {slippage*100:.4f}% > limit {slippage_limit*100:.2f}% â€” closing position immediately!")
             close_side = "SELL" if side == "BUY" else "BUY"
             self.execute_binance_request("POST", "/fapi/v1/order", {
                 "symbol": self.symbol.upper(), "side": close_side, "type": "MARKET", "quantity": quantity
             })
-            self.chat_log.append({"s": "RISK_ENGINE", "c": "risk", "m": f"[SLIPPAGE GUARD] {slippage*100:.4f}% — position closed."})
+            self.chat_log.append({"s": "RISK_ENGINE", "c": "risk", "m": f"[SLIPPAGE GUARD] {slippage*100:.4f}% â€” position closed."})
             return {"status": "SLIPPAGE_REJECT", "slippage": slippage}
         
         print(f"    [OK] Entry filled @ {fill_price} (slip: {slippage*100:.4f}%). OrderId: {main_res.get('orderId')}")
@@ -328,7 +344,7 @@ class OFIV5SniperEngine:
         tp_price = round(tp_price, 1)
         sl_price = round(sl_price, 1)
         
-        # Step 3: P0 FIX — Place REAL TP/SL bracket orders on Binance
+        # Step 3: P0 FIX â€” Place REAL TP/SL bracket orders on Binance
         close_side = "SELL" if side == "BUY" else "BUY"
         
         # Take Profit
@@ -357,7 +373,7 @@ class OFIV5SniperEngine:
         
         # If BOTH TP and SL failed, close position immediately (safety net)
         if not tp_ok and not sl_ok:
-            print("    [!!!] BRACKET FAILED — Emergency closing position!")
+            print("    [!!!] BRACKET FAILED â€” Emergency closing position!")
             self.execute_binance_request("POST", "/fapi/v1/order", {
                 "symbol": self.symbol.upper(), "side": close_side, "type": "MARKET", "quantity": quantity
             })
@@ -377,7 +393,7 @@ class OFIV5SniperEngine:
                 if not file_exists:
                     writer.writerow(['timestamp', 'z_ofi', 'spread', 'volatility', 'price', 'signal', 'tp_pct', 'sl_pct', 'strategy', 'pnl'])
                 
-                # PnL starts at 0.0 — updated by User Data Stream when trade closes
+                # PnL starts at 0.0 â€” updated by User Data Stream when trade closes
                 writer.writerow([
                     int(time.time()), round(z_ofi, 4), round(spread, 4), round(vol, 6), 
                     current_price, side, round(tp_pct, 4), round(sl_pct, 4), strategy, 0.0
@@ -390,8 +406,8 @@ class OFIV5SniperEngine:
 
     def background_llm_supervisor(self, signal, price, z_ofi, strategy, tp_pct, sl_pct):
         try:
-            sys_msg = "Bạn là Giám đốc Lượng Tử (Quant Supervisor). Đánh giá tín hiệu V5 Sniper Mode."
-            prompt = f"Vừa bắn {signal} tại {price} theo thế võ {strategy}. Z-Score: {z_ofi:.2f}. Cắt lỗ: {sl_pct*100:.2f}%. Chốt lời: {tp_pct*100:.2f}%. Đánh giá 1 câu ngắn."
+            sys_msg = "Báº¡n lÃ  GiÃ¡m Ä‘á»‘c LÆ°á»£ng Tá»­ (Quant Supervisor). ÄÃ¡nh giÃ¡ tÃ­n hiá»‡u V5 Sniper Mode."
+            prompt = f"Vá»«a báº¯n {signal} táº¡i {price} theo tháº¿ vÃµ {strategy}. Z-Score: {z_ofi:.2f}. Cáº¯t lá»—: {sl_pct*100:.2f}%. Chá»‘t lá»i: {tp_pct*100:.2f}%. ÄÃ¡nh giÃ¡ 1 cÃ¢u ngáº¯n."
             res = client.chat.completions.create(
                 model="qwen-plus",
                 messages=[{"role": "system", "content": sys_msg}, {"role": "user", "content": prompt}],
@@ -510,16 +526,9 @@ class OFIV5SniperEngine:
             
             def execute_and_log():
                 res = self.execute_trade(signal, qty, current_price, tp_pct, sl_pct, z_ofi, strategy, spread, vol)
-                # Only log success if trade was actually placed
                 if isinstance(res, dict) and 'orderId' in res:
                     self.open_positions += 1
-                    self.chat_log.append({"s": "EXECUTION", "c": "exec", "m": f"[FILLED] {qty} BTC ({strategy}). TP {tp_pct*100:.2f}% / SL {sl_pct*100:.2f}% | R:R {rr_ratio:.1f}"})
-                elif isinstance(res, dict) and res.get('status') == 'SLIPPAGE_REJECT':
-                    self.chat_log.append({"s": "EXECUTION", "c": "risk", "m": f"[REJECTED] Slippage too high — position closed immediately."})
-                elif isinstance(res, dict) and res.get('status') == 'BLOCKED':
-                    self.chat_log.append({"s": "EXECUTION", "c": "risk", "m": f"[BLOCKED] {res.get('reason', 'Risk engine')}"})
-                else:
-                    self.chat_log.append({"s": "EXECUTION", "c": "risk", "m": f"[FAILED] Trade not placed: {res}"})
+                self.chat_log.append({"s": "EXECUTION", "c": "exec", "m": f"[ACTION] Traded {qty} BTC ({strategy}). TP {tp_pct*100:.2f}% / SL {sl_pct*100:.2f}% | R:R {rr_ratio:.1f}"})
                 self.background_llm_supervisor(signal, current_price, z_ofi, strategy, tp_pct, sl_pct)
             
             threading.Thread(target=execute_and_log).start()
@@ -570,7 +579,7 @@ class OFIV5SniperEngine:
                         msg = await ws.recv()
                         data = json.loads(msg)
                         
-                        # EVENT 1: ACCOUNT_UPDATE — tracks real position state (Codex fix)
+                        # EVENT 1: ACCOUNT_UPDATE â€” tracks real position state (Codex fix)
                         if data.get('e') == 'ACCOUNT_UPDATE':
                             positions = data.get('a', {}).get('P', [])
                             active_count = 0
@@ -580,7 +589,7 @@ class OFIV5SniperEngine:
                             self.open_positions = active_count
                             print(f"    [POS SYNC] open_positions = {self.open_positions} (from ACCOUNT_UPDATE)")
                         
-                        # EVENT 2: ORDER_TRADE_UPDATE — tracks PnL on close fills
+                        # EVENT 2: ORDER_TRADE_UPDATE â€” tracks PnL on close fills
                         if data.get('e') == 'ORDER_TRADE_UPDATE':
                             order = data.get('o', {})
                             pnl = float(order.get('rp', 0))
@@ -658,7 +667,7 @@ class OFIV5SniperEngine:
             print(f"[-] Failed to update realized PnL: {e}")
 
     async def run(self):
-        print("🚀 [V8] Starting Live Sniper Mode Engine with Realtime PnL & Adaptive Learning")
+        print("ðŸš€ [V8] Starting Live Sniper Mode Engine with Realtime PnL & Adaptive Learning")
         url = f"wss://fstream.binance.com/ws/{self.symbol}@depth{self.depth_levels}@100ms"
         
         while True:
@@ -687,7 +696,7 @@ class OFIV5SniperEngine:
             self.kill_switch = False
             self.consecutive_losses = 0
             self.cooldown_until = 0
-            print("[DAILY RESET] ✅ All daily counters reset. Bot active.")
+            print("[DAILY RESET] âœ… All daily counters reset. Bot active.")
             self.chat_log.append({"s": "SYSTEM", "c": "system", "m": "[DAILY RESET] New trading day started. Counters reset."})
 
     async def main(self):
@@ -702,3 +711,36 @@ if __name__ == "__main__":
     engine = OFIV5SniperEngine(symbol="btcusdt", depth_levels=5)
     asyncio.run(engine.main())
     # Sprint C reflection is run separately via: python memory_reflection.py
+
+=== FILE: live_config.json ===
+{
+    "_comment": "KODA QUANT V8.2 - Live Phase A Config (Codex-verified thresholds)",
+    "_phase": "A",
+    "_equity": 75.0,
+
+    "leverage": 5,
+    "risk_per_trade_pct": 0.005,
+    "max_position_margin_pct": 0.20,
+    "max_trades_per_day": 6,
+    "max_consecutive_losses": 3,
+    "daily_loss_stop_pct": 0.025,
+    "weekly_loss_stop_pct": 0.06,
+    "cooldown_after_loss_sec": 900,
+    "cooldown_after_2_losses_sec": 3600,
+    "slippage_guard_pct": 0.0008,
+    "spread_guard_pct": 0.0012,
+    "min_reward_risk_ratio": 1.2,
+    "max_open_positions": 1,
+
+    "phase_b_conditions": {
+        "min_settled_trades": 100,
+        "min_days_no_breach": 14,
+        "max_drawdown_pct": 0.05,
+        "risk_per_trade_pct": 0.0075
+    },
+    "phase_c_conditions": {
+        "leverage": 10,
+        "note": "Only after Phase B pass. Keep daily stop and margin cap."
+    }
+}
+
