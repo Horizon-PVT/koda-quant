@@ -1,6 +1,6 @@
 # KODA QUANT HFT - BÀN GIAO DỰ ÁN (HANDOVER)
 
-## Trạng thái Hệ thống (V7)
+## Trạng thái Hệ thống (V7 - Active)
 Dự án đã được nâng cấp từ một Chatbot Agent thô sơ lên thành hệ thống **Prop Firm HFT (High-Frequency Trading) Engine**, hoàn thành 100% các lõi quan trọng nhất:
 
 1. **V4 OFI Engine:** Sử dụng Order Flow Imbalance đa tầng (5 levels) quét qua WebSocket 100ms.
