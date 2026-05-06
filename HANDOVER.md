@@ -1,6 +1,6 @@
 # KODA QUANT HFT - BÀN GIAO DỰ ÁN (HANDOVER)
 
-## Trạng thái Hệ thống (V7 - Active)
+## Trạng thái Hệ thống (V8 - Active)
 Dự án đã được nâng cấp từ một Chatbot Agent thô sơ lên thành hệ thống **Prop Firm HFT (High-Frequency Trading) Engine**, hoàn thành 100% các lõi quan trọng nhất:
 
 1. **V4 OFI Engine:** Sử dụng Order Flow Imbalance đa tầng (5 levels) quét qua WebSocket 100ms.
@@ -25,3 +25,8 @@ Dự án đã được nâng cấp từ một Chatbot Agent thô sơ lên thành
 ---
 > [!NOTE]
 > Ghi chú cho AI kế nhiệm: Đọc `conversation_history.txt` và file này để bắt nhịp ngay lập tức. Sếp đang dùng tư duy của một Quỹ Giao Dịch Chuyên Nghiệp. Không được tư vấn lệch hướng sang các chỉ báo tĩnh (Candlesticks, RSI, MACD).
+
+
+## V8 Update (2026-05-05)
+- Dashboard đã kéo dữ liệu thị trường thật từ Binance REST `ticker/24hr` (BTC last price + 24h change) để giám sát thời gian thực ngay trên top-nav.
+- DOM vẫn lấy real-time WebSocket 100ms từ Binance như các bản trước.
