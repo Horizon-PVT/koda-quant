@@ -1,0 +1,15 @@
+{
+  "bias": "BULL",
+  "confidence": 0.595,
+  "forecast_return": 0.001904,
+  "horizon": "4x15m",
+  "symbol": "BTCUSDT",
+  "interval": "15m",
+  "lookback": 512,
+  "pred_len": 4,
+  "max_risk_multiplier": 1.11,
+  "source": "HEURISTIC_OHLCV",
+  "updated_at": 1778037772,
+  "expires_at": 1778041372,
+  "reason": "Kronos dependencies not active; used deterministic OHLCV momentum/volatility fallback."
+}
