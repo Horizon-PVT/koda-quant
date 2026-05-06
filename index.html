@@ -82,31 +82,34 @@
             <!-- RIGHT COLUMN: Heatmap & Footprint -->
             <div class="right-column">
                 
-                <!-- Performance Heatmap -->
-                <div class="panel heatmap-panel">
+                <!-- Live Portfolio Tracker -->
+                <div class="panel portfolio-panel">
                     <div class="panel-header">
-                        <h2>Trading Calendar (April 2026)</h2>
-                        <span class="badge green">Winning Days: 100%</span>
+                        <h2>LIVE PORTFOLIO (FUTURES)</h2>
+                        <span class="badge green" id="pf-status">CONNECTED</span>
                     </div>
-                    <div class="calendar-grid">
-                        <div class="cal-day header">Mon</div>
-                        <div class="cal-day header">Tue</div>
-                        <div class="cal-day header">Wed</div>
-                        <div class="cal-day header">Thu</div>
-                        <div class="cal-day header">Fri</div>
-                        
-                        <!-- Mock Days -->
-                        <div class="cal-day empty"></div>
-                        <div class="cal-day empty"></div>
-                        <div class="cal-day win"><span class="date">1</span>+$2,450</div>
-                        <div class="cal-day win"><span class="date">2</span>+$1,200</div>
-                        <div class="cal-day win highlight"><span class="date">3</span>+$9,198</div>
-                        
-                        <div class="cal-day win"><span class="date">6</span>+$4,300</div>
-                        <div class="cal-day win"><span class="date">7</span>+$1,890</div>
-                        <div class="cal-day win"><span class="date">8</span>+$3,400</div>
-                        <div class="cal-day win"><span class="date">9</span>+$5,100</div>
-                        <div class="cal-day win"><span class="date">10</span>+$2,200</div>
+                    <div class="portfolio-balances">
+                        <div class="balance-item">
+                            <span class="label">Wallet Balance (USDT)</span>
+                            <span class="value" id="pf-balance">--</span>
+                        </div>
+                        <div class="balance-item">
+                            <span class="label">Unrealized PnL</span>
+                            <span class="value" id="pf-pnl">--</span>
+                        </div>
+                    </div>
+                    <div class="portfolio-positions">
+                        <div class="positions-header">
+                            <div>SYMBOL</div>
+                            <div>SIZE</div>
+                            <div>ENTRY</div>
+                            <div>MARK</div>
+                            <div>PNL</div>
+                        </div>
+                        <div class="positions-body" id="pf-positions">
+                            <!-- Positions injected by JS -->
+                            <div class="no-positions" style="color: var(--text-muted); text-align: center; padding: 20px;">LOADING...</div>
+                        </div>
                     </div>
                 </div>
 

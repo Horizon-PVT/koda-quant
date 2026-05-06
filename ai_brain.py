@@ -112,6 +112,7 @@ class OFIV5SniperEngine:
         
         self.chat_log = []
         self.recent_pnls = []
+        self.trades_since_adapt = 0
 
         # Sprint A/B integrations
         self.macro_adapter = MacroAgentAdapter(update_interval_sec=4 * 3600)
@@ -379,8 +380,93 @@ class OFIV5SniperEngine:
         with open('chat_logs.json', 'w', encoding='utf-8') as f:
             json.dump(self.chat_log[-15:], f, ensure_ascii=False)
 
+    def get_listen_key(self):
+        if not binance_api_key: return None
+        base_url = "https://fapi.binance.com"
+        try:
+            req = urllib.request.Request(f"{base_url}/fapi/v1/listenKey", method="POST")
+            req.add_header("X-MBX-APIKEY", binance_api_key)
+            with urllib.request.urlopen(req) as response:
+                return json.loads(response.read().decode()).get("listenKey")
+        except Exception as e:
+            print(f"[-] Failed to get listenKey: {e}")
+            return None
+
+    def keepalive_listen_key(self):
+        if not binance_api_key: return
+        base_url = "https://fapi.binance.com"
+        try:
+            req = urllib.request.Request(f"{base_url}/fapi/v1/listenKey", method="PUT")
+            req.add_header("X-MBX-APIKEY", binance_api_key)
+            urllib.request.urlopen(req)
+        except Exception as e:
+            pass
+
+    async def keepalive_loop(self):
+        while True:
+            await asyncio.sleep(50 * 60) # 50 minutes
+            self.keepalive_listen_key()
+
+    async def user_data_stream(self):
+        listenKey = self.get_listen_key()
+        if not listenKey: return
+        
+        url = f"wss://fstream.binance.com/ws/{listenKey}"
+        print("[+] User Data Stream (Order Tracker) Connected")
+        
+        while True:
+            try:
+                async with websockets.connect(url) as ws:
+                    while True:
+                        msg = await ws.recv()
+                        data = json.loads(msg)
+                        if data.get('e') == 'ORDER_TRADE_UPDATE':
+                            order = data.get('o', {})
+                            # rp is realizedPnl
+                            pnl = float(order.get('rp', 0))
+                            if order.get('X') == 'FILLED' and pnl != 0:
+                                print(f"\\n[$$$] TRADE CLOSED! Realized PnL: {pnl}\\n")
+                                self.log_realized_pnl(pnl)
+            except Exception as e:
+                await asyncio.sleep(3)
+                listenKey = self.get_listen_key()
+                url = f"wss://fstream.binance.com/ws/{listenKey}"
+
+    def log_realized_pnl(self, pnl):
+        import csv
+        csv_file = 'trade_history.csv'
+        if not os.path.isfile(csv_file): return
+        
+        try:
+            with open(csv_file, 'r', encoding='utf-8') as f:
+                reader = list(csv.reader(f))
+            
+            updated = False
+            for i in range(len(reader)-1, 0, -1):
+                if float(reader[i][9]) == 0.0:
+                    reader[i][9] = str(pnl)
+                    updated = True
+                    break
+            
+            if updated:
+                with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    writer.writerows(reader)
+                
+                # ADAPTIVE ENGINE HOOK
+                self.trades_since_adapt += 1
+                if self.trades_since_adapt >= 5:
+                    self.trades_since_adapt = 0
+                    from adaptive_engine import update_adaptive_rules
+                    update_adaptive_rules(csv_file)
+                    self.load_adaptive_config()
+                    print("[BOT] Adaptive config reloaded dynamically.")
+                    
+        except Exception as e:
+            print(f"[-] Failed to update realized PnL: {e}")
+
     async def run(self):
-        print("🚀 [V5] Starting Sniper Mode Engine (70% Winrate / Kelly Sizing / Dynamic TP-SL)")
+        print("🚀 [V8] Starting Live Sniper Mode Engine with Realtime PnL & Adaptive Learning")
         url = f"wss://fstream.binance.com/ws/{self.symbol}@depth{self.depth_levels}@100ms"
         
         while True:
@@ -394,7 +480,13 @@ class OFIV5SniperEngine:
                 print(f"[-] WebSocket Disconnected: {e}. Reconnecting in 3 seconds...")
                 await asyncio.sleep(3)
 
+    async def main(self):
+        task1 = asyncio.create_task(self.run())
+        task2 = asyncio.create_task(self.keepalive_loop())
+        task3 = asyncio.create_task(self.user_data_stream())
+        await asyncio.gather(task1, task2, task3)
+
 if __name__ == "__main__":
     engine = OFIV5SniperEngine(symbol="btcusdt", depth_levels=5)
-    asyncio.run(engine.run())
+    asyncio.run(engine.main())
     # Sprint C reflection is run separately via: python memory_reflection.py

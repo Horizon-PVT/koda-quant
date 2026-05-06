@@ -146,3 +146,70 @@ function switchTab(tabId, event) {
     // Add active class to clicked button
     event.currentTarget.classList.add('active');
 }
+
+// Live Portfolio Polling
+var pfBalanceEl = document.getElementById('pf-balance');
+var pfPnlEl = document.getElementById('pf-pnl');
+var pfPositionsEl = document.getElementById('pf-positions');
+
+async function pollLivePortfolio() {
+    try {
+        var res = await fetch('/api/portfolio');
+        var data = await res.json();
+
+        if (data.account && data.account.totalWalletBalance) {
+            var balance = parseFloat(data.account.totalWalletBalance);
+            var unrealized = parseFloat(data.account.totalUnrealizedProfit);
+
+            pfBalanceEl.textContent = '$' + balance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            var pnlSign = unrealized >= 0 ? '+$' : '-$';
+            pfPnlEl.textContent = pnlSign + Math.abs(unrealized).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            pfPnlEl.className = 'value ' + (unrealized >= 0 ? 'green' : 'red');
+        } else if (data.account && data.account.status === 'ERROR') {
+            pfBalanceEl.textContent = '$0.00';
+            pfPnlEl.textContent = '$0.00';
+            pfPositionsEl.innerHTML = '<div style="color: var(--neon-red); text-align: center; padding: 20px;">API ERROR: ' + (data.account.msg || 'Check .env keys') + '</div>';
+            return;
+        } else {
+            pfBalanceEl.textContent = '$0.00';
+            pfPnlEl.textContent = '$0.00';
+        }
+
+        if (data.positions && Array.isArray(data.positions)) {
+            var activePositions = data.positions.filter(function(p) { return parseFloat(p.positionAmt) !== 0; });
+
+            if (activePositions.length === 0) {
+                pfPositionsEl.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 20px; font-family: var(--font-mono);">NO OPEN POSITIONS</div>';
+            } else {
+                pfPositionsEl.innerHTML = '';
+                activePositions.forEach(function(p) {
+                    var size = parseFloat(p.positionAmt);
+                    var isLong = size > 0;
+                    var pnl = parseFloat(p.unRealizedProfit);
+                    var entry = parseFloat(p.entryPrice);
+                    var mark = parseFloat(p.markPrice);
+                    var sizeColor = isLong ? 'var(--neon-green)' : 'var(--neon-red)';
+                    var pnlColor = pnl >= 0 ? 'var(--neon-green)' : 'var(--neon-red)';
+                    var pnlText = (pnl >= 0 ? '+' : '') + pnl.toFixed(2);
+
+                    var row = document.createElement('div');
+                    row.className = 'position-row';
+                    row.innerHTML = '<div class="symbol">' + p.symbol + ' ' + (p.leverage || '') + 'x</div>' +
+                        '<div class="size" style="color:' + sizeColor + '">' + size + '</div>' +
+                        '<div>' + entry.toFixed(1) + '</div>' +
+                        '<div>' + mark.toFixed(1) + '</div>' +
+                        '<div style="color:' + pnlColor + '">' + pnlText + '</div>';
+                    pfPositionsEl.appendChild(row);
+                });
+            }
+        } else {
+            pfPositionsEl.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 20px; font-family: var(--font-mono);">NO OPEN POSITIONS</div>';
+        }
+    } catch (e) {
+        console.error('Portfolio fetch failed', e);
+    }
+}
+
+// Poll portfolio every 3 seconds
+pollLivePortfolio();
+setInterval(pollLivePortfolio, 3000);
