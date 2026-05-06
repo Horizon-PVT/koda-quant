@@ -21,7 +21,7 @@ load_dotenv(".env")
 BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY", "")
 BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY", "")
 
-HOST = "0.0.0.0"
+HOST = "127.0.0.1"  # P1 FIX: Bind localhost only. Set KODA_DASHBOARD_PUBLIC=1 for LAN access.
 DEFAULT_PORT = 8001
 MAX_PORT_TRIES = 20
 
@@ -44,7 +44,17 @@ def binance_request(endpoint):
         return {"status": "ERROR", "msg": str(e)}
 
 class ProxyHTTPRequestHandler(SimpleHTTPRequestHandler):
+    # P1 FIX: Block sensitive files from being served
+    BLOCKED_FILES = {'.env', 'trade_history.csv', 'adaptive_config.json', 
+                     'macro_filter.json', 'koda_v8_upgrade.patch'}
+    
     def do_GET(self):
+        # Block sensitive files
+        requested_file = os.path.basename(self.path.split('?')[0])
+        if requested_file in self.BLOCKED_FILES:
+            self.send_error(403, "Forbidden")
+            return
+            
         if self.path == '/api/portfolio':
             self.send_response(200)
             self.send_header('Content-type', 'application/json')

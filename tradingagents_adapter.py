@@ -42,13 +42,11 @@ class MacroAgentAdapter:
             self._stop.wait(self.update_interval_sec)
 
     def _mock_decision(self):
-        bias = random.choice(["BULL", "BEAR", "NEUTRAL"])
-        confidence = round(random.uniform(0.45, 0.8), 2)
-        max_risk = 1.2 if bias == "BULL" else (0.8 if bias == "BEAR" else 1.0)
+        # P0 FIX: Safe fallback — NEUTRAL only. Never random BULL/BEAR in production.
         return {
-            "bias": bias,
-            "confidence": confidence,
-            "max_risk_multiplier": max_risk,
-            "source": "MOCK_TRADINGAGENTS",
+            "bias": "NEUTRAL",
+            "confidence": 0.0,
+            "max_risk_multiplier": 1.0,
+            "source": "SAFE_FALLBACK",
             "updated_at": int(time.time()),
         }

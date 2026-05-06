@@ -21,8 +21,12 @@ from risk_manager import PortfolioRiskManager
 # Fix unicode print
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
 
-# Load API Keys
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'koda_quant', '.env'))
+# Load API Keys — try local .env first, then fallback to koda_quant path
+from pathlib import Path
+_ROOT = Path(__file__).resolve().parent
+load_dotenv(_ROOT / ".env")
+if not os.environ.get("QWEN_API_KEY"):
+    load_dotenv(_ROOT.parent / 'koda_quant' / '.env')
 api_key = os.environ.get("QWEN_API_KEY")
 binance_api_key = os.environ.get("BINANCE_API_KEY", "")
 binance_secret_key = os.environ.get("BINANCE_SECRET_KEY", "")
@@ -80,8 +84,8 @@ class OFIV5SniperEngine:
         self.symbol = symbol.lower()
         self.depth_levels = depth_levels
         
-        # Equity & Leverage Simulation
-        self.equity = 1000.0  # Simulated $1000
+        # Equity & Leverage
+        self.equity = 75.0  # Live USDT balance (updated by User Data Stream)
         self.leverage = 10
         
         # Order book state
@@ -245,28 +249,71 @@ class OFIV5SniperEngine:
 
     def execute_trade(self, side, quantity, current_price, tp_pct, sl_pct, z_ofi, strategy, spread, vol):
         if self.kill_switch or time.time() < self.cooldown_until:
-            return "BLOCKED BY RISK ENGINE"
+            return {"status": "BLOCKED", "reason": "RISK ENGINE"}
             
         if self.trades_today >= self.max_trades_per_day:
             self.kill_switch = True
-            return "MAX TRADES REACHED"
+            return {"status": "BLOCKED", "reason": "MAX TRADES"}
 
-        # Market Order
+        # Step 1: Market Order (Entry)
         print(f"[>] EXECUTING {side} {quantity} at {current_price}")
         main_res = self.execute_binance_request("POST", "/fapi/v1/order", {
             "symbol": self.symbol.upper(), "side": side, "type": "MARKET", "quantity": quantity
         })
         
-        # Calculate TP/SL prices
+        # P0 FIX: Validate order was actually filled before continuing
+        if "orderId" not in main_res:
+            print(f"[X] ENTRY FAILED: {main_res}")
+            self.chat_log.append({"s": "RISK_ENGINE", "c": "risk", "m": f"[ENTRY FAILED] {main_res.get('msg', 'Unknown error')}"})
+            return main_res
+        
+        print(f"    [OK] Entry filled. OrderId: {main_res.get('orderId')}")
+        
+        # Step 2: Calculate TP/SL prices
         tp_price = current_price * (1 + tp_pct) if side == "BUY" else current_price * (1 - tp_pct)
         sl_price = current_price * (1 - sl_pct) if side == "BUY" else current_price * (1 + sl_pct)
-        
         tp_price = round(tp_price, 1)
         sl_price = round(sl_price, 1)
         
-        print(f"    [+] Set TP: {tp_price} | SL: {sl_price}")
+        # Step 3: P0 FIX — Place REAL TP/SL bracket orders on Binance
+        close_side = "SELL" if side == "BUY" else "BUY"
         
-        # Log to structured CSV for AI Data Mining
+        # Take Profit
+        tp_res = self.execute_binance_request("POST", "/fapi/v1/order", {
+            "symbol": self.symbol.upper(),
+            "side": close_side,
+            "type": "TAKE_PROFIT_MARKET",
+            "stopPrice": tp_price,
+            "closePosition": "true",
+            "workingType": "MARK_PRICE"
+        })
+        tp_ok = "orderId" in tp_res
+        print(f"    [{'OK' if tp_ok else 'FAIL'}] TP @ {tp_price}: {tp_res.get('orderId', tp_res.get('msg', 'ERROR'))}")
+        
+        # Stop Loss
+        sl_res = self.execute_binance_request("POST", "/fapi/v1/order", {
+            "symbol": self.symbol.upper(),
+            "side": close_side,
+            "type": "STOP_MARKET",
+            "stopPrice": sl_price,
+            "closePosition": "true",
+            "workingType": "MARK_PRICE"
+        })
+        sl_ok = "orderId" in sl_res
+        print(f"    [{'OK' if sl_ok else 'FAIL'}] SL @ {sl_price}: {sl_res.get('orderId', sl_res.get('msg', 'ERROR'))}")
+        
+        # If BOTH TP and SL failed, close position immediately (safety net)
+        if not tp_ok and not sl_ok:
+            print("    [!!!] BRACKET FAILED — Emergency closing position!")
+            self.execute_binance_request("POST", "/fapi/v1/order", {
+                "symbol": self.symbol.upper(), "side": close_side, "type": "MARKET", "quantity": quantity
+            })
+            self.chat_log.append({"s": "RISK_ENGINE", "c": "risk", "m": "[EMERGENCY] TP/SL failed, position closed immediately."})
+            return {"status": "BRACKET_FAILED", "entry": main_res}
+        
+        print(f"    [+] Bracket set: TP {tp_price} | SL {sl_price}")
+        
+        # Step 4: Log to CSV only after confirmed entry
         import csv
         csv_file = 'trade_history.csv'
         file_exists = os.path.isfile(csv_file)
@@ -277,7 +324,7 @@ class OFIV5SniperEngine:
                 if not file_exists:
                     writer.writerow(['timestamp', 'z_ofi', 'spread', 'volatility', 'price', 'signal', 'tp_pct', 'sl_pct', 'strategy', 'pnl'])
                 
-                # Mock PnL as 0.0 for now, replay system will calculate it
+                # PnL starts at 0.0 — updated by User Data Stream when trade closes
                 writer.writerow([
                     int(time.time()), round(z_ofi, 4), round(spread, 4), round(vol, 6), 
                     current_price, side, round(tp_pct, 4), round(sl_pct, 4), strategy, 0.0
@@ -425,8 +472,17 @@ class OFIV5SniperEngine:
                             # rp is realizedPnl
                             pnl = float(order.get('rp', 0))
                             if order.get('X') == 'FILLED' and pnl != 0:
-                                print(f"\\n[$$$] TRADE CLOSED! Realized PnL: {pnl}\\n")
+                                print(f"\n[$$$] TRADE CLOSED! Realized PnL: {pnl}\n")
                                 self.log_realized_pnl(pnl)
+                                # P0 FIX: Sync live state to risk manager
+                                self.recent_pnls.append(pnl)
+                                self.equity += pnl
+                                if pnl < 0:
+                                    self.current_drawdown += abs(pnl)
+                                    self.consecutive_losses += 1
+                                else:
+                                    self.current_drawdown = max(0, self.current_drawdown - pnl)
+                                    self.consecutive_losses = 0
             except Exception as e:
                 await asyncio.sleep(3)
                 listenKey = self.get_listen_key()

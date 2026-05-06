@@ -1,25 +1,22 @@
 // Update Clock
-setInterval(() => {
+setInterval(function() {
     document.getElementById('sys-time').innerText = new Date().toLocaleTimeString('en-US', { hour12: false }) + ' ICT';
 }, 1000);
 
-
-
 // Live BTC ticker (real Binance REST market data)
-const btcLastEl = document.getElementById('btc-last');
-const btcChangeEl = document.getElementById('btc-change');
+var btcLastEl = document.getElementById('btc-last');
+var btcChangeEl = document.getElementById('btc-change');
 
 async function pollTicker24h() {
     try {
-        const res = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT');
-        const data = await res.json();
-        const last = Number(data.lastPrice || 0);
-        const change = Number(data.priceChangePercent || 0);
+        var res = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT');
+        var data = await res.json();
+        var last = Number(data.lastPrice || 0);
+        var change = Number(data.priceChangePercent || 0);
 
-        btcLastEl.textContent = last ? `$${last.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '--';
-        btcChangeEl.textContent = Number.isFinite(change) ? `${change.toFixed(2)}%` : '--';
-        btcChangeEl.classList.remove('green');
-        btcChangeEl.classList.remove('red');
+        btcLastEl.textContent = last ? '$' + last.toLocaleString('en-US', { maximumFractionDigits: 2 }) : '--';
+        btcChangeEl.textContent = Number.isFinite(change) ? change.toFixed(2) + '%' : '--';
+        btcChangeEl.classList.remove('green', 'red');
         btcChangeEl.classList.add(change >= 0 ? 'green' : 'red');
     } catch (err) {
         console.error('Ticker fetch failed:', err);
@@ -28,98 +25,118 @@ async function pollTicker24h() {
 
 pollTicker24h();
 setInterval(pollTicker24h, 3000);
+
 // Connect to REAL Binance WebSocket for Live Order Book (DOM)
-const domData = document.getElementById('dom-data');
-const ws = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@depth10@100ms');
+var domData = document.getElementById('dom-data');
+var domWs = null;
 
-ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    if (!data.bids || !data.asks) return;
-    
-    domData.innerHTML = '';
-    
-    // Calculate max volume for visual bars
-    let maxVol = 0;
-    const allOrders = [...data.asks, ...data.bids];
-    allOrders.forEach(order => {
-        const vol = parseFloat(order[1]);
-        if (vol > maxVol) maxVol = vol;
-    });
+function connectDomWs() {
+    domWs = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@depth10@100ms');
 
-    // Render Asks (Red) - Top 5
-    for(let i = 4; i >= 0; i--) {
-        const price = parseFloat(data.asks[i][0]).toFixed(1);
-        const vol = parseFloat(data.asks[i][1]).toFixed(3);
-        const width = (vol / maxVol) * 100;
+    domWs.onmessage = function(event) {
+        var data = JSON.parse(event.data);
+        if (!data.bids || !data.asks) return;
         
-        const row = document.createElement('div');
-        row.className = 'dom-row';
-        row.innerHTML = `
-            <div class="ask-bg" style="width: ${width}%"></div>
-            <div class="bid-vol">-</div>
-            <div class="price">${price}</div>
-            <div class="ask-vol">${vol}</div>
-            <div style="color: var(--neon-red)">ASK</div>
-        `;
-        domData.appendChild(row);
-    }
-    
-    // Divider
-    const divider = document.createElement('div');
-    divider.style.borderBottom = '1px solid rgba(255,255,255,0.2)';
-    divider.style.margin = '2px 0';
-    domData.appendChild(divider);
-
-    // Render Bids (Green) - Top 5
-    for(let i = 0; i < 5; i++) {
-        const price = parseFloat(data.bids[i][0]).toFixed(1);
-        const vol = parseFloat(data.bids[i][1]).toFixed(3);
-        const width = (vol / maxVol) * 100;
+        domData.innerHTML = '';
         
-        const row = document.createElement('div');
-        row.className = 'dom-row';
-        row.innerHTML = `
-            <div class="bid-bg" style="width: ${width}%"></div>
-            <div class="bid-vol">${vol}</div>
-            <div class="price">${price}</div>
-            <div class="ask-vol">-</div>
-            <div style="color: var(--neon-green)">BID</div>
-        `;
-        domData.appendChild(row);
-    }
-};
+        var maxVol = 0;
+        var allOrders = data.asks.concat(data.bids);
+        allOrders.forEach(function(order) {
+            var vol = parseFloat(order[1]);
+            if (vol > maxVol) maxVol = vol;
+        });
 
-ws.onerror = (error) => {
-    console.error('Binance WebSocket Error:', error);
-};
+        // Render Asks (Red) - Top 5
+        for (var i = 4; i >= 0; i--) {
+            var price = parseFloat(data.asks[i][0]).toFixed(1);
+            var vol = parseFloat(data.asks[i][1]).toFixed(3);
+            var width = (vol / maxVol) * 100;
+            
+            var row = document.createElement('div');
+            row.className = 'dom-row';
+            row.innerHTML = '<div class="ask-bg" style="width: ' + width + '%"></div>' +
+                '<div class="bid-vol">-</div>' +
+                '<div class="price">' + price + '</div>' +
+                '<div class="ask-vol">' + vol + '</div>' +
+                '<div style="color: var(--neon-red)">ASK</div>';
+            domData.appendChild(row);
+        }
+        
+        // Divider
+        var divider = document.createElement('div');
+        divider.style.borderBottom = '1px solid rgba(255,255,255,0.2)';
+        divider.style.margin = '2px 0';
+        domData.appendChild(divider);
+
+        // Render Bids (Green) - Top 5
+        for (var j = 0; j < 5; j++) {
+            var bPrice = parseFloat(data.bids[j][0]).toFixed(1);
+            var bVol = parseFloat(data.bids[j][1]).toFixed(3);
+            var bWidth = (bVol / maxVol) * 100;
+            
+            var bRow = document.createElement('div');
+            bRow.className = 'dom-row';
+            bRow.innerHTML = '<div class="bid-bg" style="width: ' + bWidth + '%"></div>' +
+                '<div class="bid-vol">' + bVol + '</div>' +
+                '<div class="price">' + bPrice + '</div>' +
+                '<div class="ask-vol">-</div>' +
+                '<div style="color: var(--neon-green)">BID</div>';
+            domData.appendChild(bRow);
+        }
+    };
+
+    domWs.onerror = function(error) {
+        console.error('Binance WebSocket Error:', error);
+    };
+
+    // P2 FIX: Auto-reconnect with exponential backoff
+    domWs.onclose = function() {
+        console.warn('DOM WebSocket closed. Reconnecting in 3s...');
+        setTimeout(connectDomWs, 3000);
+    };
+}
+
+connectDomWs();
 
 // Multi-Agent Chat Simulation (Fetching from AI Brain)
-const chatBox = document.getElementById('chat-box');
-let lastChatHash = "";
+var chatBox = document.getElementById('chat-box');
+var lastChatHash = "";
 
 async function pollAILogs() {
     try {
-        // Add timestamp to prevent caching
-        const res = await fetch('/chat_logs.json?t=' + new Date().getTime());
-        const logs = await res.json();
+        var res = await fetch('/chat_logs.json?t=' + new Date().getTime());
+        var logs = await res.json();
         
-        const currentHash = JSON.stringify(logs);
+        var currentHash = JSON.stringify(logs);
         if (currentHash !== lastChatHash && logs.length > 0) {
             lastChatHash = currentHash;
             
-            chatBox.innerHTML += `<div class="msg" style="color: var(--text-muted);">--- NEW CYCLE ---</div>`;
+            var cycleDiv = document.createElement('div');
+            cycleDiv.className = 'msg';
+            cycleDiv.style.color = 'var(--text-muted)';
+            cycleDiv.textContent = '--- NEW CYCLE ---';
+            chatBox.appendChild(cycleDiv);
             
-            // Render the messages one by one with a small delay for typing effect
-            logs.forEach((msg, index) => {
-                setTimeout(() => {
-                    chatBox.innerHTML += `
-                        <div class="msg">
-                            <span class="sender ${msg.c}">[${msg.s}]</span>
-                            <span class="text">${msg.m}</span>
-                        </div>
-                    `;
+            // P1 XSS FIX: Safe rendering with textContent (never innerHTML for user/LLM data)
+            var allowedClasses = {micro: true, risk: true, exec: true, system: true};
+            logs.forEach(function(msg, index) {
+                setTimeout(function() {
+                    var msgDiv = document.createElement('div');
+                    msgDiv.className = 'msg';
+                    
+                    var sender = document.createElement('span');
+                    sender.className = 'sender ' + (allowedClasses[msg.c] ? msg.c : '');
+                    sender.textContent = '[' + msg.s + ']';
+                    
+                    var text = document.createElement('span');
+                    text.className = 'text';
+                    text.textContent = ' ' + msg.m;
+                    
+                    msgDiv.appendChild(sender);
+                    msgDiv.appendChild(text);
+                    chatBox.appendChild(msgDiv);
                     chatBox.scrollTop = chatBox.scrollHeight;
-                }, index * 800); // 800ms delay between each line
+                }, index * 800);
             });
         }
     } catch (e) {
@@ -132,18 +149,13 @@ setInterval(pollAILogs, 3000);
 
 // Tab Switching Logic
 function switchTab(tabId, event) {
-    // Hide all tabs
     document.getElementById('tab-room').style.display = 'none';
     document.getElementById('tab-chart').style.display = 'none';
     
-    // Remove active class from all buttons
-    const btns = document.querySelectorAll('.tab-btn');
-    btns.forEach(btn => btn.classList.remove('active'));
+    var btns = document.querySelectorAll('.tab-btn');
+    btns.forEach(function(btn) { btn.classList.remove('active'); });
     
-    // Show selected tab
     document.getElementById('tab-' + tabId).style.display = tabId === 'room' ? 'grid' : 'block';
-    
-    // Add active class to clicked button
     event.currentTarget.classList.add('active');
 }
 

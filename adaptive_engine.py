@@ -33,14 +33,28 @@ def update_adaptive_rules(csv_file="trade_history.csv"):
         return load_config()
         
     df = pd.read_csv(csv_file)
-    if len(df) < 5:
-        print("⚠️ Not enough trades to adapt (need at least 5). Skipping.")
+    
+    # P1 FIX: Validate CSV schema
+    required_cols = ['pnl', 'z_ofi', 'spread', 'volatility', 'price', 'signal']
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        print(f"⚠️ CSV missing columns: {missing}. Skipping adaptive update.")
         return load_config()
     
+    # P1 FIX: Filter out unsettled trades (PnL still 0.0 = not yet closed)
+    df_settled = df[df['pnl'] != 0.0].copy()
+    
+    if len(df_settled) < 5:
+        print(f"⚠️ Only {len(df_settled)} settled trades (need 5+). Skipping.")
+        return load_config()
+    
+    # Use only last 50 settled trades (rolling window for faster adaptation)
+    df_recent = df_settled.tail(50)
+    
     # ===== BASIC METRICS =====
-    total_trades = len(df)
-    winrate = (df['pnl'] > 0).mean()
-    avg_pnl = df['pnl'].mean()
+    total_trades = len(df_recent)
+    winrate = (df_recent['pnl'] > 0).mean()
+    avg_pnl = df_recent['pnl'].mean()
     
     # ===== LOAD CURRENT CONFIG =====
     config = load_config()
