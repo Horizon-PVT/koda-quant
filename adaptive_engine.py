@@ -11,14 +11,17 @@ def load_config():
     try:
         with open(CONFIG_FILE, "r") as f:
             return json.load(f)
-    except:
-        return {
-            "z_threshold": 2.5,
-            "risk_multiplier": 1.0,
-            "last_winrate": 0.0,
-            "avg_pnl": 0.0,
-            "total_trades": 0
-        }
+    except FileNotFoundError:
+        print(f"[ADAPTIVE] Config file {CONFIG_FILE} not found, using defaults.")
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"[ADAPTIVE] Config file corrupted: {e}. Using defaults.")
+    return {
+        "z_threshold": 2.5,
+        "risk_multiplier": 1.0,
+        "last_winrate": 0.0,
+        "avg_pnl": 0.0,
+        "total_trades": 0
+    }
 
 def save_config(config):
     with open(CONFIG_FILE, "w") as f:

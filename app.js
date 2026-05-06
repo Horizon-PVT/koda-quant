@@ -29,9 +29,29 @@ setInterval(pollTicker24h, 3000);
 // Connect to REAL Binance WebSocket for Live Order Book (DOM)
 var domData = document.getElementById('dom-data');
 var domWs = null;
+var domReconnectDelay = 3000; // P2 FIX: exponential backoff starting at 3s
+var DOM_RECONNECT_MAX = 30000; // Cap at 30s
+
+function buildDomRow(bgClass, bidVol, price, askVol, labelText, labelColor, bgWidth) {
+    var row = document.createElement('div');
+    row.className = 'dom-row';
+    var bg = document.createElement('div');
+    bg.className = bgClass;
+    bg.style.width = bgWidth + '%';
+    row.appendChild(bg);
+    var bv = document.createElement('div'); bv.className = 'bid-vol'; bv.textContent = bidVol; row.appendChild(bv);
+    var pr = document.createElement('div'); pr.className = 'price'; pr.textContent = price; row.appendChild(pr);
+    var av = document.createElement('div'); av.className = 'ask-vol'; av.textContent = askVol; row.appendChild(av);
+    var lb = document.createElement('div'); lb.style.color = labelColor; lb.textContent = labelText; row.appendChild(lb);
+    return row;
+}
 
 function connectDomWs() {
     domWs = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@depth10@100ms');
+
+    domWs.onopen = function() {
+        domReconnectDelay = 3000; // Reset on successful connect
+    };
 
     domWs.onmessage = function(event) {
         var data = JSON.parse(event.data);
@@ -51,18 +71,9 @@ function connectDomWs() {
             var price = parseFloat(data.asks[i][0]).toFixed(1);
             var vol = parseFloat(data.asks[i][1]).toFixed(3);
             var width = (vol / maxVol) * 100;
-            
-            var row = document.createElement('div');
-            row.className = 'dom-row';
-            row.innerHTML = '<div class="ask-bg" style="width: ' + width + '%"></div>' +
-                '<div class="bid-vol">-</div>' +
-                '<div class="price">' + price + '</div>' +
-                '<div class="ask-vol">' + vol + '</div>' +
-                '<div style="color: var(--neon-red)">ASK</div>';
-            domData.appendChild(row);
+            domData.appendChild(buildDomRow('ask-bg', '-', price, vol, 'ASK', 'var(--neon-red)', width));
         }
         
-        // Divider
         var divider = document.createElement('div');
         divider.style.borderBottom = '1px solid rgba(255,255,255,0.2)';
         divider.style.margin = '2px 0';
@@ -73,15 +84,7 @@ function connectDomWs() {
             var bPrice = parseFloat(data.bids[j][0]).toFixed(1);
             var bVol = parseFloat(data.bids[j][1]).toFixed(3);
             var bWidth = (bVol / maxVol) * 100;
-            
-            var bRow = document.createElement('div');
-            bRow.className = 'dom-row';
-            bRow.innerHTML = '<div class="bid-bg" style="width: ' + bWidth + '%"></div>' +
-                '<div class="bid-vol">' + bVol + '</div>' +
-                '<div class="price">' + bPrice + '</div>' +
-                '<div class="ask-vol">-</div>' +
-                '<div style="color: var(--neon-green)">BID</div>';
-            domData.appendChild(bRow);
+            domData.appendChild(buildDomRow('bid-bg', bVol, bPrice, '-', 'BID', 'var(--neon-green)', bWidth));
         }
     };
 
@@ -89,10 +92,11 @@ function connectDomWs() {
         console.error('Binance WebSocket Error:', error);
     };
 
-    // P2 FIX: Auto-reconnect with exponential backoff
+    // P2 FIX: True exponential backoff (3s → 6s → 12s → ... → cap 30s)
     domWs.onclose = function() {
-        console.warn('DOM WebSocket closed. Reconnecting in 3s...');
-        setTimeout(connectDomWs, 3000);
+        console.warn('DOM WebSocket closed. Reconnecting in ' + (domReconnectDelay/1000) + 's...');
+        setTimeout(connectDomWs, domReconnectDelay);
+        domReconnectDelay = Math.min(domReconnectDelay * 2, DOM_RECONNECT_MAX);
     };
 }
 
@@ -180,7 +184,12 @@ async function pollLivePortfolio() {
         } else if (data.account && data.account.status === 'ERROR') {
             pfBalanceEl.textContent = '$0.00';
             pfPnlEl.textContent = '$0.00';
-            pfPositionsEl.innerHTML = '<div style="color: var(--neon-red); text-align: center; padding: 20px;">API ERROR: ' + (data.account.msg || 'Check .env keys') + '</div>';
+            // P2 FIX: safe DOM instead of innerHTML for error msg
+            pfPositionsEl.innerHTML = '';
+            var errDiv = document.createElement('div');
+            errDiv.style.cssText = 'color: var(--neon-red); text-align: center; padding: 20px;';
+            errDiv.textContent = 'API ERROR: ' + (data.account.msg || 'Check .env keys');
+            pfPositionsEl.appendChild(errDiv);
             return;
         } else {
             pfBalanceEl.textContent = '$0.00';
@@ -191,7 +200,11 @@ async function pollLivePortfolio() {
             var activePositions = data.positions.filter(function(p) { return parseFloat(p.positionAmt) !== 0; });
 
             if (activePositions.length === 0) {
-                pfPositionsEl.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 20px; font-family: var(--font-mono);">NO OPEN POSITIONS</div>';
+                pfPositionsEl.innerHTML = '';
+                var emptyDiv = document.createElement('div');
+                emptyDiv.style.cssText = 'color: var(--text-muted); text-align: center; padding: 20px; font-family: var(--font-mono);';
+                emptyDiv.textContent = 'NO OPEN POSITIONS';
+                pfPositionsEl.appendChild(emptyDiv);
             } else {
                 pfPositionsEl.innerHTML = '';
                 activePositions.forEach(function(p) {
@@ -204,18 +217,23 @@ async function pollLivePortfolio() {
                     var pnlColor = pnl >= 0 ? 'var(--neon-green)' : 'var(--neon-red)';
                     var pnlText = (pnl >= 0 ? '+' : '') + pnl.toFixed(2);
 
+                    // P2 FIX: all position data rendered via safe DOM
                     var row = document.createElement('div');
                     row.className = 'position-row';
-                    row.innerHTML = '<div class="symbol">' + p.symbol + ' ' + (p.leverage || '') + 'x</div>' +
-                        '<div class="size" style="color:' + sizeColor + '">' + size + '</div>' +
-                        '<div>' + entry.toFixed(1) + '</div>' +
-                        '<div>' + mark.toFixed(1) + '</div>' +
-                        '<div style="color:' + pnlColor + '">' + pnlText + '</div>';
+                    var symDiv = document.createElement('div'); symDiv.className = 'symbol'; symDiv.textContent = p.symbol + ' ' + (p.leverage || '') + 'x'; row.appendChild(symDiv);
+                    var sizeDiv = document.createElement('div'); sizeDiv.className = 'size'; sizeDiv.style.color = sizeColor; sizeDiv.textContent = size; row.appendChild(sizeDiv);
+                    var entryDiv = document.createElement('div'); entryDiv.textContent = entry.toFixed(1); row.appendChild(entryDiv);
+                    var markDiv = document.createElement('div'); markDiv.textContent = mark.toFixed(1); row.appendChild(markDiv);
+                    var pnlDiv = document.createElement('div'); pnlDiv.style.color = pnlColor; pnlDiv.textContent = pnlText; row.appendChild(pnlDiv);
                     pfPositionsEl.appendChild(row);
                 });
             }
         } else {
-            pfPositionsEl.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 20px; font-family: var(--font-mono);">NO OPEN POSITIONS</div>';
+            pfPositionsEl.innerHTML = '';
+            var noDiv = document.createElement('div');
+            noDiv.style.cssText = 'color: var(--text-muted); text-align: center; padding: 20px; font-family: var(--font-mono);';
+            noDiv.textContent = 'NO OPEN POSITIONS';
+            pfPositionsEl.appendChild(noDiv);
         }
     } catch (e) {
         console.error('Portfolio fetch failed', e);
