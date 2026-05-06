@@ -30,3 +30,9 @@ Dự án đã được nâng cấp từ một Chatbot Agent thô sơ lên thành
 ## V8 Update (2026-05-05)
 - Dashboard đã kéo dữ liệu thị trường thật từ Binance REST `ticker/24hr` (BTC last price + 24h change) để giám sát thời gian thực ngay trên top-nav.
 - DOM vẫn lấy real-time WebSocket 100ms từ Binance như các bản trước.
+
+
+## Cách mở Dashboard local
+1. Chạy `python start_dashboard.py` (hoặc `npm start`).
+2. Mở trình duyệt: `http://localhost:8000/index.html`.
+3. Nếu vẫn lỗi `ERR_CONNECTION_REFUSED`, nghĩa là server chưa chạy hoặc bị app khác chiếm port 8000.
