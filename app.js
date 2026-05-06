@@ -1,245 +1,282 @@
-// Update Clock
-setInterval(function() {
+// Initialize Chart.js configuration for dark theme
+Chart.defaults.color = '#8b9bb4';
+Chart.defaults.font.family = 'JetBrains Mono';
+
+// 1. Equity Curve Chart
+const ctxEquity = document.getElementById('equityChart').getContext('2d');
+const equityChart = new Chart(ctxEquity, {
+    type: 'line',
+    data: {
+        labels: [], // Timestamps
+        datasets: [{
+            label: 'Cumulative PnL (USDT)',
+            data: [], // PnL values
+            borderColor: '#00d4ff',
+            backgroundColor: 'rgba(0, 212, 255, 0.1)',
+            borderWidth: 2,
+            fill: true,
+            tension: 0.4,
+            pointRadius: 0,
+            pointHitRadius: 10
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: { display: false },
+            tooltip: {
+                mode: 'index',
+                intersect: false,
+                backgroundColor: 'rgba(10, 14, 39, 0.9)',
+                titleColor: '#00d4ff',
+                bodyColor: '#fff',
+                borderColor: '#00d4ff',
+                borderWidth: 1
+            }
+        },
+        scales: {
+            x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { maxTicksLimit: 8 } },
+            y: { grid: { color: 'rgba(255,255,255,0.05)' } }
+        }
+    }
+});
+
+// 2. Gauges (Using Doughnut charts)
+const gaugeOptions = {
+    responsive: false,
+    cutout: '80%',
+    plugins: { tooltip: { enabled: false }, legend: { display: false } },
+    animation: { animateRotate: true, animateScale: false }
+};
+
+const ctxWr = document.getElementById('winrateGauge').getContext('2d');
+const wrGauge = new Chart(ctxWr, {
+    type: 'doughnut',
+    data: { datasets: [{ data: [0, 100], backgroundColor: ['#00ff88', '#27272a'], borderWidth: 0 }] },
+    options: gaugeOptions
+});
+
+const ctxPf = document.getElementById('pfGauge').getContext('2d');
+const pfGauge = new Chart(ctxPf, {
+    type: 'doughnut',
+    data: { datasets: [{ data: [0, 10], backgroundColor: ['#00d4ff', '#27272a'], borderWidth: 0 }] },
+    options: gaugeOptions
+});
+
+// 3. Update Time
+setInterval(() => {
     document.getElementById('sys-time').innerText = new Date().toLocaleTimeString('en-US', { hour12: false }) + ' ICT';
 }, 1000);
 
-// Live BTC ticker (real Binance REST market data)
-var btcLastEl = document.getElementById('btc-last');
-var btcChangeEl = document.getElementById('btc-change');
-
-async function pollTicker24h() {
+// 4. Fetch BTC Ticker
+async function pollTicker() {
     try {
-        var res = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT');
-        var data = await res.json();
-        var last = Number(data.lastPrice || 0);
-        var change = Number(data.priceChangePercent || 0);
+        const res = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT');
+        const data = await res.json();
+        const last = Number(data.lastPrice);
+        const change = Number(data.priceChangePercent);
+        document.getElementById('btc-last').innerText = '$' + last.toLocaleString('en-US', {minimumFractionDigits: 2});
+        const changeEl = document.getElementById('btc-change');
+        changeEl.innerText = change.toFixed(2) + '%';
+        changeEl.className = 'value ' + (change >= 0 ? 'green' : 'red');
+    } catch(e) {}
+}
+pollTicker();
+setInterval(pollTicker, 3000);
 
-        btcLastEl.textContent = last ? '$' + last.toLocaleString('en-US', { maximumFractionDigits: 2 }) : '--';
-        btcChangeEl.textContent = Number.isFinite(change) ? change.toFixed(2) + '%' : '--';
-        btcChangeEl.classList.remove('green', 'red');
-        btcChangeEl.classList.add(change >= 0 ? 'green' : 'red');
-    } catch (err) {
-        console.error('Ticker fetch failed:', err);
+// 5. Fetch Portfolio
+async function pollPortfolio() {
+    try {
+        const res = await fetch('/api/portfolio');
+        const data = await res.json();
+        if(data.account) {
+            document.getElementById('pf-balance').innerText = '$' + Number(data.account.totalWalletBalance).toFixed(2);
+            const upnl = Number(data.account.totalUnrealizedProfit);
+            const pnlEl = document.getElementById('pf-pnl');
+            pnlEl.innerText = (upnl >= 0 ? '+' : '') + upnl.toFixed(2);
+            pnlEl.style.color = upnl >= 0 ? 'var(--neon-green)' : 'var(--neon-red)';
+            document.getElementById('pf-status').innerText = 'CONNECTED';
+            document.getElementById('pf-status').className = 'badge green';
+        }
+    } catch(e) {
+        document.getElementById('pf-status').innerText = 'DISCONNECTED';
+        document.getElementById('pf-status').className = 'badge red';
     }
 }
+pollPortfolio();
+setInterval(pollPortfolio, 5000);
 
-pollTicker24h();
-setInterval(pollTicker24h, 3000);
-
-// Connect to REAL Binance WebSocket for Live Order Book (DOM)
-var domData = document.getElementById('dom-data');
-var domWs = null;
-var domReconnectDelay = 3000; // P2 FIX: exponential backoff starting at 3s
-var DOM_RECONNECT_MAX = 30000; // Cap at 30s
-
-function buildDomRow(bgClass, bidVol, price, askVol, labelText, labelColor, bgWidth) {
-    var row = document.createElement('div');
-    row.className = 'dom-row';
-    var bg = document.createElement('div');
-    bg.className = bgClass;
-    bg.style.width = bgWidth + '%';
-    row.appendChild(bg);
-    var bv = document.createElement('div'); bv.className = 'bid-vol'; bv.textContent = bidVol; row.appendChild(bv);
-    var pr = document.createElement('div'); pr.className = 'price'; pr.textContent = price; row.appendChild(pr);
-    var av = document.createElement('div'); av.className = 'ask-vol'; av.textContent = askVol; row.appendChild(av);
-    var lb = document.createElement('div'); lb.style.color = labelColor; lb.textContent = labelText; row.appendChild(lb);
-    return row;
+// 6. Fetch Trade History & Update Charts
+async function fetchHistory() {
+    try {
+        const res = await fetch('/api/history');
+        const history = await res.json();
+        if(history.length > 0 && !history[0].error) {
+            updateDashboard(history);
+        }
+    } catch(e) {}
 }
 
+function updateDashboard(history) {
+    const tbody = document.getElementById('history-tbody');
+    tbody.innerHTML = '';
+    
+    let totalPnL = 0;
+    let wins = 0;
+    let grossProfit = 0;
+    let grossLoss = 0;
+    
+    let labels = [];
+    let equityData = [];
+    let currentEquity = 0;
+    
+    // Sort ascending by time for chart
+    const sortedHistory = [...history].sort((a,b) => parseInt(a.timestamp) - parseInt(b.timestamp));
+    
+    sortedHistory.forEach(trade => {
+        const pnl = parseFloat(trade.pnl);
+        if(pnl !== 0) { // Only settled trades
+            currentEquity += pnl;
+            labels.push(new Date(parseInt(trade.timestamp)*1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}));
+            equityData.push(currentEquity);
+            
+            if(pnl > 0) { wins++; grossProfit += pnl; }
+            else { grossLoss += Math.abs(pnl); }
+        }
+    });
+    
+    // Update Equity Chart
+    equityChart.data.labels = labels;
+    equityChart.data.datasets[0].data = equityData;
+    equityChart.update();
+    
+    // Reverse for table (newest first)
+    history.reverse().forEach(trade => {
+        const tr = document.createElement('tr');
+        const pnl = parseFloat(trade.pnl);
+        const pnlClass = pnl > 0 ? 'green' : (pnl < 0 ? 'red' : '');
+        const pnlText = pnl > 0 ? `+$${pnl.toFixed(2)}` : `$${pnl.toFixed(2)}`;
+        const sideClass = trade.signal === 'BUY' ? 'green' : 'red';
+        
+        tr.innerHTML = `
+            <td>${new Date(parseInt(trade.timestamp)*1000).toLocaleTimeString()}</td>
+            <td class="${sideClass}">${trade.signal}</td>
+            <td>${parseFloat(trade.price).toFixed(1)}</td>
+            <td>${parseFloat(trade.z_ofi).toFixed(2)}</td>
+            <td>${parseFloat(trade.spread).toFixed(4)}</td>
+            <td>${trade.strategy || '-'}</td>
+            <td class="${pnlClass}">${pnlText}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+    
+    // Update Stats
+    const totalSettled = equityData.length;
+    document.getElementById('trade-count').innerText = `${totalSettled} TRADES`;
+    
+    if(totalSettled > 0) {
+        document.getElementById('nav-equity').innerText = (currentEquity >= 0 ? '+$' : '-$') + Math.abs(currentEquity).toFixed(2);
+        
+        const wr = (wins / totalSettled) * 100;
+        const pf = grossLoss === 0 ? grossProfit : grossProfit / grossLoss;
+        
+        document.getElementById('nav-winrate').innerText = wr.toFixed(1) + '%';
+        document.getElementById('nav-pf').innerText = pf.toFixed(2);
+        
+        // Update Gauges
+        document.getElementById('gauge-val-wr').innerText = wr.toFixed(0) + '%';
+        wrGauge.data.datasets[0].data = [wr, 100-wr];
+        wrGauge.data.datasets[0].backgroundColor[0] = wr >= 50 ? '#00ff88' : '#ff3366';
+        wrGauge.update();
+        
+        document.getElementById('gauge-val-pf').innerText = pf.toFixed(2);
+        const pfCapped = Math.min(pf, 5);
+        pfGauge.data.datasets[0].data = [pfCapped, 5-pfCapped];
+        pfGauge.update();
+    }
+}
+fetchHistory();
+setInterval(fetchHistory, 5000);
+
+// 7. Live DOM WebSocket
+function buildDomRow(bgClass, bidVol, price, askVol, width) {
+    const div = document.createElement('div');
+    div.className = 'dom-row ' + (bgClass === 'ask' ? 'ask' : 'bid');
+    div.innerHTML = `
+        <div class="depth-bar" style="width: ${width}%"></div>
+        <div>${bidVol}</div>
+        <div class="dom-price">${price}</div>
+        <div>${askVol}</div>
+        <div>${bgClass === 'ask' ? 'ASK' : 'BID'}</div>
+    `;
+    return div;
+}
+
+let domWs = null;
+let reconnectDelay = 3000;
 function connectDomWs() {
     domWs = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@depth10@100ms');
-
-    domWs.onopen = function() {
-        domReconnectDelay = 3000; // Reset on successful connect
-    };
-
-    domWs.onmessage = function(event) {
-        var data = JSON.parse(event.data);
-        if (!data.bids || !data.asks) return;
+    domWs.onopen = () => reconnectDelay = 3000;
+    domWs.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+        if(!data.bids || !data.asks) return;
         
+        const domData = document.getElementById('dom-data');
         domData.innerHTML = '';
         
-        var maxVol = 0;
-        var allOrders = data.asks.concat(data.bids);
-        allOrders.forEach(function(order) {
-            var vol = parseFloat(order[1]);
-            if (vol > maxVol) maxVol = vol;
-        });
-
-        // Render Asks (Red) - Top 5
-        for (var i = 4; i >= 0; i--) {
-            var price = parseFloat(data.asks[i][0]).toFixed(1);
-            var vol = parseFloat(data.asks[i][1]).toFixed(3);
-            var width = (vol / maxVol) * 100;
-            domData.appendChild(buildDomRow('ask-bg', '-', price, vol, 'ASK', 'var(--neon-red)', width));
+        let maxVol = 0;
+        [...data.asks, ...data.bids].forEach(o => maxVol = Math.max(maxVol, parseFloat(o[1])));
+        
+        // Asks
+        for(let i=4; i>=0; i--) {
+            const p = parseFloat(data.asks[i][0]).toFixed(1);
+            const v = parseFloat(data.asks[i][1]).toFixed(3);
+            const w = (v/maxVol)*100;
+            domData.appendChild(buildDomRow('ask', '-', p, v, w));
         }
         
-        var divider = document.createElement('div');
-        divider.style.borderBottom = '1px solid rgba(255,255,255,0.2)';
-        divider.style.margin = '2px 0';
-        domData.appendChild(divider);
-
-        // Render Bids (Green) - Top 5
-        for (var j = 0; j < 5; j++) {
-            var bPrice = parseFloat(data.bids[j][0]).toFixed(1);
-            var bVol = parseFloat(data.bids[j][1]).toFixed(3);
-            var bWidth = (bVol / maxVol) * 100;
-            domData.appendChild(buildDomRow('bid-bg', bVol, bPrice, '-', 'BID', 'var(--neon-green)', bWidth));
+        const div = document.createElement('div');
+        div.style.borderBottom = '1px solid rgba(255,255,255,0.1)';
+        div.style.margin = '4px 0';
+        domData.appendChild(div);
+        
+        // Bids
+        for(let i=0; i<5; i++) {
+            const p = parseFloat(data.bids[i][0]).toFixed(1);
+            const v = parseFloat(data.bids[i][1]).toFixed(3);
+            const w = (v/maxVol)*100;
+            domData.appendChild(buildDomRow('bid', v, p, '-', w));
         }
     };
-
-    domWs.onerror = function(error) {
-        console.error('Binance WebSocket Error:', error);
-    };
-
-    // P2 FIX: True exponential backoff (3s → 6s → 12s → ... → cap 30s)
-    domWs.onclose = function() {
-        console.warn('DOM WebSocket closed. Reconnecting in ' + (domReconnectDelay/1000) + 's...');
-        setTimeout(connectDomWs, domReconnectDelay);
-        domReconnectDelay = Math.min(domReconnectDelay * 2, DOM_RECONNECT_MAX);
+    domWs.onclose = () => {
+        setTimeout(connectDomWs, reconnectDelay);
+        reconnectDelay = Math.min(reconnectDelay * 2, 30000);
     };
 }
-
 connectDomWs();
 
-// Multi-Agent Chat Simulation (Fetching from AI Brain)
-var chatBox = document.getElementById('chat-box');
-var lastChatHash = "";
-
-async function pollAILogs() {
+// 8. Fetch Virtual Trading Room Chat Logs
+async function fetchChat() {
     try {
-        var res = await fetch('/chat_logs.json?t=' + new Date().getTime());
-        var logs = await res.json();
+        const res = await fetch('/chat_logs.json?' + new Date().getTime());
+        const logs = await res.json();
+        const chatBox = document.getElementById('chat-box');
+        if(!chatBox) return;
         
-        var currentHash = JSON.stringify(logs);
-        if (currentHash !== lastChatHash && logs.length > 0) {
-            lastChatHash = currentHash;
-            
-            var cycleDiv = document.createElement('div');
-            cycleDiv.className = 'msg';
-            cycleDiv.style.color = 'var(--text-muted)';
-            cycleDiv.textContent = '--- NEW CYCLE ---';
-            chatBox.appendChild(cycleDiv);
-            
-            // P1 XSS FIX: Safe rendering with textContent (never innerHTML for user/LLM data)
-            var allowedClasses = {micro: true, risk: true, exec: true, system: true};
-            logs.forEach(function(msg, index) {
-                setTimeout(function() {
-                    var msgDiv = document.createElement('div');
-                    msgDiv.className = 'msg';
-                    
-                    var sender = document.createElement('span');
-                    sender.className = 'sender ' + (allowedClasses[msg.c] ? msg.c : '');
-                    sender.textContent = '[' + msg.s + ']';
-                    
-                    var text = document.createElement('span');
-                    text.className = 'text';
-                    text.textContent = ' ' + msg.m;
-                    
-                    msgDiv.appendChild(sender);
-                    msgDiv.appendChild(text);
-                    chatBox.appendChild(msgDiv);
-                    chatBox.scrollTop = chatBox.scrollHeight;
-                }, index * 800);
-            });
-        }
-    } catch (e) {
-        // file not ready yet or error, ignore
-    }
+        chatBox.innerHTML = '';
+        logs.forEach(log => {
+            const div = document.createElement('div');
+            div.className = 'chat-msg';
+            let color = '#8b9bb4';
+            if(log.c === 'exec') color = '#00d4ff';
+            if(log.c === 'risk') color = '#ff3366';
+            if(log.c === 'system') color = '#00ff88';
+            div.innerHTML = `<span style="color: ${color}; width: 120px; display: inline-block;">[${log.s}]</span> <span>${log.m}</span>`;
+            chatBox.appendChild(div);
+        });
+        chatBox.scrollTop = chatBox.scrollHeight;
+    } catch(e) {}
 }
-
-// Poll every 3 seconds
-setInterval(pollAILogs, 3000);
-
-// Tab Switching Logic
-function switchTab(tabId, event) {
-    document.getElementById('tab-room').style.display = 'none';
-    document.getElementById('tab-chart').style.display = 'none';
-    
-    var btns = document.querySelectorAll('.tab-btn');
-    btns.forEach(function(btn) { btn.classList.remove('active'); });
-    
-    document.getElementById('tab-' + tabId).style.display = tabId === 'room' ? 'grid' : 'block';
-    event.currentTarget.classList.add('active');
-}
-
-// Live Portfolio Polling
-var pfBalanceEl = document.getElementById('pf-balance');
-var pfPnlEl = document.getElementById('pf-pnl');
-var pfPositionsEl = document.getElementById('pf-positions');
-
-async function pollLivePortfolio() {
-    try {
-        var res = await fetch('/api/portfolio');
-        var data = await res.json();
-
-        if (data.account && data.account.totalWalletBalance) {
-            var balance = parseFloat(data.account.totalWalletBalance);
-            var unrealized = parseFloat(data.account.totalUnrealizedProfit);
-
-            pfBalanceEl.textContent = '$' + balance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-            var pnlSign = unrealized >= 0 ? '+$' : '-$';
-            pfPnlEl.textContent = pnlSign + Math.abs(unrealized).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-            pfPnlEl.className = 'value ' + (unrealized >= 0 ? 'green' : 'red');
-        } else if (data.account && data.account.status === 'ERROR') {
-            pfBalanceEl.textContent = '$0.00';
-            pfPnlEl.textContent = '$0.00';
-            // P2 FIX: safe DOM instead of innerHTML for error msg
-            pfPositionsEl.innerHTML = '';
-            var errDiv = document.createElement('div');
-            errDiv.style.cssText = 'color: var(--neon-red); text-align: center; padding: 20px;';
-            errDiv.textContent = 'API ERROR: ' + (data.account.msg || 'Check .env keys');
-            pfPositionsEl.appendChild(errDiv);
-            return;
-        } else {
-            pfBalanceEl.textContent = '$0.00';
-            pfPnlEl.textContent = '$0.00';
-        }
-
-        if (data.positions && Array.isArray(data.positions)) {
-            var activePositions = data.positions.filter(function(p) { return parseFloat(p.positionAmt) !== 0; });
-
-            if (activePositions.length === 0) {
-                pfPositionsEl.innerHTML = '';
-                var emptyDiv = document.createElement('div');
-                emptyDiv.style.cssText = 'color: var(--text-muted); text-align: center; padding: 20px; font-family: var(--font-mono);';
-                emptyDiv.textContent = 'NO OPEN POSITIONS';
-                pfPositionsEl.appendChild(emptyDiv);
-            } else {
-                pfPositionsEl.innerHTML = '';
-                activePositions.forEach(function(p) {
-                    var size = parseFloat(p.positionAmt);
-                    var isLong = size > 0;
-                    var pnl = parseFloat(p.unRealizedProfit);
-                    var entry = parseFloat(p.entryPrice);
-                    var mark = parseFloat(p.markPrice);
-                    var sizeColor = isLong ? 'var(--neon-green)' : 'var(--neon-red)';
-                    var pnlColor = pnl >= 0 ? 'var(--neon-green)' : 'var(--neon-red)';
-                    var pnlText = (pnl >= 0 ? '+' : '') + pnl.toFixed(2);
-
-                    // P2 FIX: all position data rendered via safe DOM
-                    var row = document.createElement('div');
-                    row.className = 'position-row';
-                    var symDiv = document.createElement('div'); symDiv.className = 'symbol'; symDiv.textContent = p.symbol + ' ' + (p.leverage || '') + 'x'; row.appendChild(symDiv);
-                    var sizeDiv = document.createElement('div'); sizeDiv.className = 'size'; sizeDiv.style.color = sizeColor; sizeDiv.textContent = size; row.appendChild(sizeDiv);
-                    var entryDiv = document.createElement('div'); entryDiv.textContent = entry.toFixed(1); row.appendChild(entryDiv);
-                    var markDiv = document.createElement('div'); markDiv.textContent = mark.toFixed(1); row.appendChild(markDiv);
-                    var pnlDiv = document.createElement('div'); pnlDiv.style.color = pnlColor; pnlDiv.textContent = pnlText; row.appendChild(pnlDiv);
-                    pfPositionsEl.appendChild(row);
-                });
-            }
-        } else {
-            pfPositionsEl.innerHTML = '';
-            var noDiv = document.createElement('div');
-            noDiv.style.cssText = 'color: var(--text-muted); text-align: center; padding: 20px; font-family: var(--font-mono);';
-            noDiv.textContent = 'NO OPEN POSITIONS';
-            pfPositionsEl.appendChild(noDiv);
-        }
-    } catch (e) {
-        console.error('Portfolio fetch failed', e);
-    }
-}
-
-// Poll portfolio every 3 seconds
-pollLivePortfolio();
-setInterval(pollLivePortfolio, 3000);
+fetchChat();
+setInterval(fetchChat, 500); // Increased speed to 500ms

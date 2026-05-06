@@ -35,6 +35,21 @@ if not api_key:
     print("ERROR: QWEN_API_KEY not found in .env")
     sys.exit(1)
 
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+def send_telegram_message(msg):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
+    try:
+        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), method="POST")
+        req.add_header("Content-Type", "application/json")
+        urllib.request.urlopen(req)
+    except Exception as e:
+        print(f"[-] Telegram Error: {e}")
+
 client = OpenAI(
     api_key=api_key,
     base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
@@ -513,9 +528,13 @@ class OFIV5SniperEngine:
                 # Only log success if trade was actually placed
                 if isinstance(res, dict) and 'orderId' in res:
                     self.open_positions += 1
-                    self.chat_log.append({"s": "EXECUTION", "c": "exec", "m": f"[FILLED] {qty} BTC ({strategy}). TP {tp_pct*100:.2f}% / SL {sl_pct*100:.2f}% | R:R {rr_ratio:.1f}"})
+                    msg = f"[FILLED] {qty} BTC ({strategy}). TP {tp_pct*100:.2f}% / SL {sl_pct*100:.2f}% | R:R {rr_ratio:.1f}"
+                    self.chat_log.append({"s": "EXECUTION", "c": "exec", "m": msg})
+                    send_telegram_message(f"🟢 <b>KODA QUANT ENTRY</b>\nSymbol: BTC/USDT\nSide: {signal}\nQty: {qty}\nPrice: ${current_price}\nStrategy: {strategy}")
                 elif isinstance(res, dict) and res.get('status') == 'SLIPPAGE_REJECT':
-                    self.chat_log.append({"s": "EXECUTION", "c": "risk", "m": f"[REJECTED] Slippage too high — position closed immediately."})
+                    msg = f"[REJECTED] Slippage too high — position closed immediately."
+                    self.chat_log.append({"s": "EXECUTION", "c": "risk", "m": msg})
+                    send_telegram_message(f"⚠️ <b>SLIPPAGE REJECT</b>\nPosition closed immediately to protect capital.")
                 elif isinstance(res, dict) and res.get('status') == 'BLOCKED':
                     self.chat_log.append({"s": "EXECUTION", "c": "risk", "m": f"[BLOCKED] {res.get('reason', 'Risk engine')}"})
                 else:
@@ -594,13 +613,21 @@ class OFIV5SniperEngine:
                                     self.current_drawdown += abs(pnl)
                                     self.daily_realized_loss += abs(pnl)
                                     self.consecutive_losses += 1
+                                    send_telegram_message(f"🔴 <b>TRADE CLOSED (LOSS)</b>\nPnL: ${pnl:.2f}\nConsecutive Losses: {self.consecutive_losses}")
                                     if self.consecutive_losses == 1:
                                         self.cooldown_until = time.time() + self.cooldown_after_loss
                                     elif self.consecutive_losses >= 2:
                                         self.cooldown_until = time.time() + self.cooldown_after_2_losses
+                                        send_telegram_message(f"⚠️ <b>COOLDOWN TRIGGERED</b>\nPause due to {self.consecutive_losses} consecutive losses.")
+                                    
+                                    if self.daily_realized_loss >= self.live_cfg.get('daily_loss_limit', 5.0):
+                                        self.kill_switch = True
+                                        self.chat_log.append({"s": "RISK_ENGINE", "c": "risk", "m": f"[KILL SWITCH] Daily loss > ${self.live_cfg.get('daily_loss_limit')}."})
+                                        send_telegram_message(f"🚨 <b>KILL SWITCH ACTIVATED</b>\nDaily loss limit reached (${self.daily_realized_loss:.2f}). Trading halted.")
                                 else:
                                     self.current_drawdown = max(0, self.current_drawdown - pnl)
                                     self.consecutive_losses = 0
+                                    send_telegram_message(f"🟢 <b>TRADE CLOSED (WIN)</b>\nPnL: +${pnl:.2f}")
             except Exception as e:
                 await asyncio.sleep(3)
                 listenKey = self.get_listen_key()
@@ -659,6 +686,7 @@ class OFIV5SniperEngine:
 
     async def run(self):
         print("🚀 [V8] Starting Live Sniper Mode Engine with Realtime PnL & Adaptive Learning")
+        send_telegram_message("🚀 <b>KODA QUANT ENGINE LIVE</b>\nV8.5.1 System started successfully.\nMonitoring BTC/USDT Order Flow...")
         url = f"wss://fstream.binance.com/ws/{self.symbol}@depth{self.depth_levels}@100ms"
         
         while True:
@@ -689,6 +717,7 @@ class OFIV5SniperEngine:
             self.cooldown_until = 0
             print("[DAILY RESET] ✅ All daily counters reset. Bot active.")
             self.chat_log.append({"s": "SYSTEM", "c": "system", "m": "[DAILY RESET] New trading day started. Counters reset."})
+            send_telegram_message(f"🔄 <b>DAILY RESET</b>\nAll counters reset. Bot is active for the new trading day.")
 
     async def main(self):
         task1 = asyncio.create_task(self.run())

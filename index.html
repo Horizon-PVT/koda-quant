@@ -3,31 +3,32 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Koda Quant V8 - HFT Multi-Agent</title>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <title>Koda Quant PRO - HFT Multi-Agent</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <div class="app-container">
         <!-- TOP NAV -->
         <header class="top-nav">
             <div class="logo">
-                <span class="neon-text">KODA QUANT V8 <span>LIVE MARKET MODE</span></span>
-                <span class="badge">HFT ENGINE</span>
+                <span class="neon-text">KODA QUANT PRO <span>V8.5.1 ENGINE</span></span>
+                <span class="badge">LIVE PAPER TRADING</span>
                 <span class="badge red">BINANCE: BTC/USDT</span>
             </div>
             <div class="nav-stats">
                 <div class="stat-item">
-                    <span class="label">Net PnL</span>
-                    <span class="value green">+$95,544.02</span>
+                    <span class="label">Total Equity</span>
+                    <span class="value green" id="nav-equity">--</span>
                 </div>
                 <div class="stat-item">
                     <span class="label">Win Rate</span>
-                    <span class="value green">90.9%</span>
+                    <span class="value green" id="nav-winrate">--</span>
                 </div>
                 <div class="stat-item">
                     <span class="label">Profit Factor</span>
-                    <span class="value">19.13</span>
+                    <span class="value" id="nav-pf">--</span>
                 </div>
                 <div class="stat-item">
                     <span class="label">BTC Last</span>
@@ -43,54 +44,96 @@
                 </div>
             </div>
         </header>
-        <!-- TAB NAVIGATION -->
-        <div class="tabs">
-            <button class="tab-btn active" onclick="switchTab('room', event)">VIRTUAL TRADING ROOM (DOM & AI)</button>
-            <button class="tab-btn" onclick="switchTab('chart', event)">TECHNICAL CHART (TRADINGVIEW)</button>
-        </div>
 
-        <!-- MAIN GRID (TAB 1: TRADING ROOM) -->
-        <main class="main-grid" id="tab-room">
-            <!-- LEFT COLUMN: Multi-Agent Room -->
-            <div class="panel agent-panel">
-                <div class="panel-header">
-                    <h2>Virtual Trading Room</h2>
-                    <select id="room-selector">
-                        <option>COMMON</option>
-                        <option>MICROSTRUCTURE_AGENT</option>
-                        <option>RISK_AGENT</option>
-                        <option>EXECUTION_AGENT</option>
-                    </select>
+        <!-- MAIN GRID -->
+        <main class="main-grid">
+            
+            <!-- CHARTS AREA -->
+            <div class="charts-area">
+                <!-- Equity Curve Chart -->
+                <div class="panel chart-container">
+                    <div class="panel-header">
+                        <h2>EQUITY CURVE (PnL)</h2>
+                    </div>
+                    <div style="position: relative; height: 100%; width: 100%; padding: 10px;">
+                        <canvas id="equityChart"></canvas>
+                    </div>
                 </div>
                 
-                <div class="chat-container" id="chat-box">
-                    <!-- Chat messages will be appended here by JS -->
-                </div>
-
-                <div class="agent-status-bar">
-                    <div class="status-indicator">
-                        <div class="dot blink-green"></div>
-                        <span>MICROSTRUCTURE: <b>RUNNING (189ms)</b></span>
+                <!-- Performance Gauges -->
+                <div class="panel chart-container">
+                    <div class="panel-header">
+                        <h2>PERFORMANCE METRICS</h2>
                     </div>
-                    <div class="status-indicator">
-                        <div class="dot blink-green"></div>
-                        <span>RISK: <b>APPROVED (120ms)</b></span>
+                    <div class="gauges-container">
+                        <div class="gauge">
+                            <canvas id="winrateGauge" width="120" height="120"></canvas>
+                            <div class="gauge-value" id="gauge-val-wr">0%</div>
+                            <span class="gauge-label">Win Rate</span>
+                        </div>
+                        <div class="gauge">
+                            <canvas id="pfGauge" width="120" height="120"></canvas>
+                            <div class="gauge-value" id="gauge-val-pf">0.0</div>
+                            <span class="gauge-label">Profit Factor</span>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <!-- RIGHT COLUMN: Heatmap & Footprint -->
+            <!-- VIRTUAL TRADING ROOM AREA -->
+            <div class="panel room-area">
+                <div class="panel-header">
+                    <h2>VIRTUAL TRADING ROOM (LIVE LOGS)</h2>
+                    <div class="agent-status-bar">
+                        <div class="status-indicator">
+                            <div class="dot blink-green"></div>
+                            <span style="font-family: var(--font-mono); font-size: 11px; color: var(--neon-green);">MICROSTRUCTURE: RUNNING</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="chat-container" id="chat-box">
+                    <!-- Logs injected by JS -->
+                </div>
+            </div>
+
+            <!-- TRADE HISTORY AREA -->
+            <div class="panel history-area">
+                <div class="panel-header">
+                    <h2>LIVE TRADE HISTORY</h2>
+                    <span class="badge" id="trade-count">0 TRADES</span>
+                </div>
+                <div class="history-body">
+                    <table class="history-table">
+                        <thead>
+                            <tr>
+                                <th>TIME</th>
+                                <th>SIDE</th>
+                                <th>PRICE</th>
+                                <th>Z-SCORE</th>
+                                <th>SPREAD</th>
+                                <th>STRATEGY</th>
+                                <th>PNL</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-tbody">
+                            <!-- Injected by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- RIGHT COLUMN: DOM & Portfolio -->
             <div class="right-column">
                 
                 <!-- Live Portfolio Tracker -->
                 <div class="panel portfolio-panel">
                     <div class="panel-header">
-                        <h2>LIVE PORTFOLIO (FUTURES)</h2>
+                        <h2>ACCOUNT HEALTH <span style="font-size: 10px; color: var(--neon-blue); margin-left: 8px;">ID: KODA-PR0-851</span></h2>
                         <span class="badge green" id="pf-status">CONNECTED</span>
                     </div>
                     <div class="portfolio-balances">
                         <div class="balance-item">
-                            <span class="label">Wallet Balance (USDT)</span>
+                            <span class="label">Wallet Balance</span>
                             <span class="value" id="pf-balance">--</span>
                         </div>
                         <div class="balance-item">
@@ -98,25 +141,12 @@
                             <span class="value" id="pf-pnl">--</span>
                         </div>
                     </div>
-                    <div class="portfolio-positions">
-                        <div class="positions-header">
-                            <div>SYMBOL</div>
-                            <div>SIZE</div>
-                            <div>ENTRY</div>
-                            <div>MARK</div>
-                            <div>PNL</div>
-                        </div>
-                        <div class="positions-body" id="pf-positions">
-                            <!-- Positions injected by JS -->
-                            <div class="no-positions" style="color: var(--text-muted); text-align: center; padding: 20px;">LOADING...</div>
-                        </div>
-                    </div>
                 </div>
 
                 <!-- Footprint / Order Book DOM -->
                 <div class="panel dom-panel">
                     <div class="panel-header">
-                        <h2>Order Flow / Level 2 DOM (BTC/USDT)</h2>
+                        <h2>ORDER FLOW DOM (BTC/USDT)</h2>
                         <div class="live-pulse">LIVE</div>
                     </div>
                     <div class="dom-table">
@@ -133,41 +163,8 @@
                 </div>
 
             </div>
-        </main>
 
-        <!-- MAIN GRID (TAB 2: CHART) -->
-        <main class="main-grid" id="tab-chart" style="display: none; padding: 16px;">
-            <div class="panel" style="width: 100%; height: 100%;">
-                <div class="panel-header">
-                    <h2>Market Chart (<span id="chart-symbol-text">BTCUSDT</span>)</h2>
-                </div>
-                <!-- TradingView Widget BEGIN -->
-                <div class="tradingview-widget-container" style="height:100%;width:100%">
-                  <div id="tradingview_chart" style="height:calc(100% - 32px);width:100%"></div>
-                  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-                  <script type="text/javascript">
-                  let tvWidget = new TradingView.widget({
-                    "autosize": true,
-                    "symbol": "BINANCE:BTCUSDT",
-                    "interval": "D",
-                    "timezone": "Asia/Ho_Chi_Minh",
-                    "theme": "dark",
-                    "style": "1",
-                    "locale": "vi",
-                    "enable_publishing": false,
-                    "backgroundColor": "#18181b",
-                    "gridColor": "#27272a",
-                    "hide_top_toolbar": false,
-                    "hide_legend": false,
-                    "save_image": false,
-                    "container_id": "tradingview_chart"
-                  });
-                  </script>
-                </div>
-                <!-- TradingView Widget END -->
-            </div>
         </main>
-
     </div>
     <script src="app.js"></script>
 </body>

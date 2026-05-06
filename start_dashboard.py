@@ -73,6 +73,22 @@ class ProxyHTTPRequestHandler(SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(response_data).encode('utf-8'))
             return
             
+        if self.path == '/api/history':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            history = []
+            if os.path.exists("trade_history.csv"):
+                import csv
+                try:
+                    with open("trade_history.csv", newline='', encoding='utf-8') as f:
+                        reader = csv.DictReader(f)
+                        history = list(reader)
+                except Exception as e:
+                    history = [{"error": str(e)}]
+            self.wfile.write(json.dumps(history).encode('utf-8'))
+            return
+            
         # Serve static files for all other paths
         super().do_GET()
 
