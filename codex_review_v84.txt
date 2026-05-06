@@ -1,3 +1,23 @@
+﻿=== KODA QUANT V8.4 FINAL REVIEW (commit 55e3238) ===
+
+Lan truoc ban tim ra bug: open_positions bi desync vi chi giam khi pnl != 0.
+Da fix bang 2 lop:
+
+1. ACCOUNT_UPDATE event trong User Data Stream: dem so position co pa != 0 tu exchange
+2. sync_open_positions() REST fallback: poll /fapi/v2/positionRisk moi 60s, tu dong correct neu lech
+3. Bo open_positions decrement cu trong ORDER_TRADE_UPDATE (khong con phu thuoc pnl != 0)
+4. Them position_sync_loop() vao asyncio.gather (task4)
+
+Kiem tra:
+- user_data_stream() co xu ly ACCOUNT_UPDATE truoc, ORDER_TRADE_UPDATE sau khong?
+- open_positions co con bi giam sai trong ORDER_TRADE_UPDATE khong?  
+- sync_open_positions() co query dung endpoint va dem dung khong?
+- position_sync_loop co chay moi 60s khong?
+- main() co gather ca 4 task khong?
+
+Neu tat ca OK: xac nhan "V8.4 PRODUCTION SAFEGUARDS VERIFIED - READY FOR PAPER TRADING".
+
+=== FILE: ai_brain.py (chi phan lien quan) ===
 import os
 import json
 import time
@@ -21,7 +41,7 @@ from risk_manager import PortfolioRiskManager
 # Fix unicode print
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
 
-# Load API Keys — try local .env first, then fallback to koda_quant path
+# Load API Keys â€” try local .env first, then fallback to koda_quant path
 from pathlib import Path
 _ROOT = Path(__file__).resolve().parent
 load_dotenv(_ROOT / ".env")
@@ -142,7 +162,7 @@ class OFIV5SniperEngine:
         try:
             with open('live_config.json', 'r') as f:
                 cfg = json.load(f)
-                print(f"[CONFIG] Loaded live_config.json — Phase {cfg.get('_phase', '?')}, Leverage {cfg.get('leverage', '?')}x")
+                print(f"[CONFIG] Loaded live_config.json â€” Phase {cfg.get('_phase', '?')}, Leverage {cfg.get('leverage', '?')}x")
                 return cfg
         except FileNotFoundError:
             print("[CONFIG] live_config.json not found, using safe defaults.")
@@ -284,35 +304,19 @@ class OFIV5SniperEngine:
             self.kill_switch = True
             return {"status": "BLOCKED", "reason": "MAX TRADES"}
 
-        # Step 1: Market Order (Entry) with idempotency key
-        import uuid
-        client_order_id = f"koda_{int(time.time())}_{uuid.uuid4().hex[:8]}"
-        print(f"[>] EXECUTING {side} {quantity} at {current_price} (id: {client_order_id})")
+        # Step 1: Market Order (Entry)
+        print(f"[>] EXECUTING {side} {quantity} at {current_price}")
         main_res = self.execute_binance_request("POST", "/fapi/v1/order", {
-            "symbol": self.symbol.upper(), "side": side, "type": "MARKET", 
-            "quantity": quantity, "newClientOrderId": client_order_id
+            "symbol": self.symbol.upper(), "side": side, "type": "MARKET", "quantity": quantity
         })
         
-        # Validate order was actually filled before continuing
+        # P0 FIX: Validate order was actually filled before continuing
         if "orderId" not in main_res:
             print(f"[X] ENTRY FAILED: {main_res}")
             self.chat_log.append({"s": "RISK_ENGINE", "c": "risk", "m": f"[ENTRY FAILED] {main_res.get('msg', 'Unknown error')}"})
             return main_res
         
-        # Slippage guard: check actual fill price vs expected
-        fill_price = float(main_res.get('avgPrice', current_price))
-        slippage = abs(fill_price - current_price) / current_price
-        slippage_limit = self.live_cfg.get('slippage_guard_pct', 0.0008)
-        if slippage > slippage_limit:
-            print(f"    [!] SLIPPAGE {slippage*100:.4f}% > limit {slippage_limit*100:.2f}% — closing position immediately!")
-            close_side = "SELL" if side == "BUY" else "BUY"
-            self.execute_binance_request("POST", "/fapi/v1/order", {
-                "symbol": self.symbol.upper(), "side": close_side, "type": "MARKET", "quantity": quantity
-            })
-            self.chat_log.append({"s": "RISK_ENGINE", "c": "risk", "m": f"[SLIPPAGE GUARD] {slippage*100:.4f}% — position closed."})
-            return {"status": "SLIPPAGE_REJECT", "slippage": slippage}
-        
-        print(f"    [OK] Entry filled @ {fill_price} (slip: {slippage*100:.4f}%). OrderId: {main_res.get('orderId')}")
+        print(f"    [OK] Entry filled. OrderId: {main_res.get('orderId')}")
         
         # Step 2: Calculate TP/SL prices
         tp_price = current_price * (1 + tp_pct) if side == "BUY" else current_price * (1 - tp_pct)
@@ -320,7 +324,7 @@ class OFIV5SniperEngine:
         tp_price = round(tp_price, 1)
         sl_price = round(sl_price, 1)
         
-        # Step 3: P0 FIX — Place REAL TP/SL bracket orders on Binance
+        # Step 3: P0 FIX â€” Place REAL TP/SL bracket orders on Binance
         close_side = "SELL" if side == "BUY" else "BUY"
         
         # Take Profit
@@ -349,7 +353,7 @@ class OFIV5SniperEngine:
         
         # If BOTH TP and SL failed, close position immediately (safety net)
         if not tp_ok and not sl_ok:
-            print("    [!!!] BRACKET FAILED — Emergency closing position!")
+            print("    [!!!] BRACKET FAILED â€” Emergency closing position!")
             self.execute_binance_request("POST", "/fapi/v1/order", {
                 "symbol": self.symbol.upper(), "side": close_side, "type": "MARKET", "quantity": quantity
             })
@@ -369,7 +373,7 @@ class OFIV5SniperEngine:
                 if not file_exists:
                     writer.writerow(['timestamp', 'z_ofi', 'spread', 'volatility', 'price', 'signal', 'tp_pct', 'sl_pct', 'strategy', 'pnl'])
                 
-                # PnL starts at 0.0 — updated by User Data Stream when trade closes
+                # PnL starts at 0.0 â€” updated by User Data Stream when trade closes
                 writer.writerow([
                     int(time.time()), round(z_ofi, 4), round(spread, 4), round(vol, 6), 
                     current_price, side, round(tp_pct, 4), round(sl_pct, 4), strategy, 0.0
@@ -382,8 +386,8 @@ class OFIV5SniperEngine:
 
     def background_llm_supervisor(self, signal, price, z_ofi, strategy, tp_pct, sl_pct):
         try:
-            sys_msg = "Bạn là Giám đốc Lượng Tử (Quant Supervisor). Đánh giá tín hiệu V5 Sniper Mode."
-            prompt = f"Vừa bắn {signal} tại {price} theo thế võ {strategy}. Z-Score: {z_ofi:.2f}. Cắt lỗ: {sl_pct*100:.2f}%. Chốt lời: {tp_pct*100:.2f}%. Đánh giá 1 câu ngắn."
+            sys_msg = "Báº¡n lÃ  GiÃ¡m Ä‘á»‘c LÆ°á»£ng Tá»­ (Quant Supervisor). ÄÃ¡nh giÃ¡ tÃ­n hiá»‡u V5 Sniper Mode."
+            prompt = f"Vá»«a báº¯n {signal} táº¡i {price} theo tháº¿ vÃµ {strategy}. Z-Score: {z_ofi:.2f}. Cáº¯t lá»—: {sl_pct*100:.2f}%. Chá»‘t lá»i: {tp_pct*100:.2f}%. ÄÃ¡nh giÃ¡ 1 cÃ¢u ngáº¯n."
             res = client.chat.completions.create(
                 model="qwen-plus",
                 messages=[{"role": "system", "content": sys_msg}, {"role": "user", "content": prompt}],
@@ -555,7 +559,7 @@ class OFIV5SniperEngine:
                         msg = await ws.recv()
                         data = json.loads(msg)
                         
-                        # EVENT 1: ACCOUNT_UPDATE — tracks real position state (Codex fix)
+                        # EVENT 1: ACCOUNT_UPDATE â€” tracks real position state (Codex fix)
                         if data.get('e') == 'ACCOUNT_UPDATE':
                             positions = data.get('a', {}).get('P', [])
                             active_count = 0
@@ -565,7 +569,7 @@ class OFIV5SniperEngine:
                             self.open_positions = active_count
                             print(f"    [POS SYNC] open_positions = {self.open_positions} (from ACCOUNT_UPDATE)")
                         
-                        # EVENT 2: ORDER_TRADE_UPDATE — tracks PnL on close fills
+                        # EVENT 2: ORDER_TRADE_UPDATE â€” tracks PnL on close fills
                         if data.get('e') == 'ORDER_TRADE_UPDATE':
                             order = data.get('o', {})
                             pnl = float(order.get('rp', 0))
@@ -643,7 +647,7 @@ class OFIV5SniperEngine:
             print(f"[-] Failed to update realized PnL: {e}")
 
     async def run(self):
-        print("🚀 [V8] Starting Live Sniper Mode Engine with Realtime PnL & Adaptive Learning")
+        print("ðŸš€ [V8] Starting Live Sniper Mode Engine with Realtime PnL & Adaptive Learning")
         url = f"wss://fstream.binance.com/ws/{self.symbol}@depth{self.depth_levels}@100ms"
         
         while True:
@@ -657,33 +661,15 @@ class OFIV5SniperEngine:
                 print(f"[-] WebSocket Disconnected: {e}. Reconnecting in 3 seconds...")
                 await asyncio.sleep(3)
 
-    async def daily_reset_loop(self):
-        """Reset daily counters at UTC 00:00."""
-        import datetime
-        while True:
-            now = datetime.datetime.utcnow()
-            tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1)
-            wait_seconds = (tomorrow - now).total_seconds()
-            print(f"[DAILY RESET] Next reset in {wait_seconds/3600:.1f}h (UTC 00:00)")
-            await asyncio.sleep(wait_seconds)
-            # Reset all daily counters
-            self.trades_today = 0
-            self.daily_realized_loss = 0.0
-            self.kill_switch = False
-            self.consecutive_losses = 0
-            self.cooldown_until = 0
-            print("[DAILY RESET] ✅ All daily counters reset. Bot active.")
-            self.chat_log.append({"s": "SYSTEM", "c": "system", "m": "[DAILY RESET] New trading day started. Counters reset."})
-
     async def main(self):
         task1 = asyncio.create_task(self.run())
         task2 = asyncio.create_task(self.keepalive_loop())
         task3 = asyncio.create_task(self.user_data_stream())
         task4 = asyncio.create_task(self.position_sync_loop())
-        task5 = asyncio.create_task(self.daily_reset_loop())
-        await asyncio.gather(task1, task2, task3, task4, task5)
+        await asyncio.gather(task1, task2, task3, task4)
 
 if __name__ == "__main__":
     engine = OFIV5SniperEngine(symbol="btcusdt", depth_levels=5)
     asyncio.run(engine.main())
     # Sprint C reflection is run separately via: python memory_reflection.py
+
