@@ -1,12 +1,13 @@
 """
 Security Tests for Koda Quant HFT System
-Tests: Dashboard Auth (fail-closed, rate-limit, correct/wrong password)
+Tests: Dashboard Auth (fail-closed, IP rate-limit, correct/wrong password, 429)
        Backend Safety Gate (SIMULATED when gate is off)
 """
 import pytest
 import os
 import sys
 import base64
+import time
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
@@ -30,11 +31,25 @@ class FakeHeaders(dict):
 
 class FakeHandler:
     """Lightweight stand-in for ProxyHTTPRequestHandler."""
-    def __init__(self, headers):
+    def __init__(self, headers, client_ip="127.0.0.1"):
         self.headers = headers
+        self.client_address = (client_ip, 12345)
 
     def check_auth(self):
         return start_dashboard.ProxyHTTPRequestHandler.check_auth(self)
+
+    def _client_ip(self):
+        return start_dashboard.ProxyHTTPRequestHandler._client_ip(self)
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """Clear the IP fail buckets before each test."""
+    with start_dashboard._rate_lock:
+        start_dashboard._fail_buckets.clear()
+    yield
+    with start_dashboard._rate_lock:
+        start_dashboard._fail_buckets.clear()
 
 
 # --- Fail-closed ---
@@ -48,19 +63,17 @@ def test_auth_fail_closed_when_no_password():
 # --- Missing Authorization header ---
 def test_auth_rejects_missing_header():
     start_dashboard.DASHBOARD_PASS = "Secret123"
-    handler = FakeHandler(FakeHeaders())          # no Authorization key
+    handler = FakeHandler(FakeHeaders())
     assert handler.check_auth() is False
 
 
-# --- Wrong password triggers delay ---
-def test_auth_rejects_wrong_password_with_delay():
+# --- Wrong password records a fail ---
+def test_auth_rejects_wrong_password():
     start_dashboard.DASHBOARD_PASS = "Secret123"
     start_dashboard.DASHBOARD_USER = "admin"
     creds = base64.b64encode(b"admin:wrongpassword").decode()
     handler = FakeHandler(FakeHeaders({"Authorization": f"Basic {creds}"}))
-    with patch("time.sleep") as mock_sleep:
-        assert handler.check_auth() is False
-        mock_sleep.assert_called_once_with(2)
+    assert handler.check_auth() is False
 
 
 # --- Correct password ---
@@ -80,11 +93,44 @@ def test_bind_server_raises_without_password():
         start_dashboard.bind_server(8001)
 
 
+# --- IP rate limiter: lockout after MAX_FAILS ---
+def test_rate_limiter_locks_out_after_max_fails():
+    """After MAX_FAILS wrong attempts from same IP, check_auth returns RATE_LIMITED."""
+    start_dashboard.DASHBOARD_PASS = "Secret123"
+    start_dashboard.DASHBOARD_USER = "admin"
+    ip = "10.0.0.99"
+    creds = base64.b64encode(b"admin:bad").decode()
+
+    for _ in range(start_dashboard.MAX_FAILS):
+        handler = FakeHandler(FakeHeaders({"Authorization": f"Basic {creds}"}), client_ip=ip)
+        result = handler.check_auth()
+        assert result is False  # wrong password, not yet rate limited
+
+    # Next attempt should be rate limited
+    handler = FakeHandler(FakeHeaders({"Authorization": f"Basic {creds}"}), client_ip=ip)
+    assert handler.check_auth() == "RATE_LIMITED"
+
+
+# --- Different IPs are independent ---
+def test_rate_limiter_does_not_affect_other_ips():
+    """Lockout on one IP must not affect a different IP."""
+    start_dashboard.DASHBOARD_PASS = "Secret123"
+    start_dashboard.DASHBOARD_USER = "admin"
+    creds_bad = base64.b64encode(b"admin:bad").decode()
+    creds_good = base64.b64encode(b"admin:Secret123").decode()
+
+    # Exhaust IP-A
+    for _ in range(start_dashboard.MAX_FAILS + 1):
+        h = FakeHandler(FakeHeaders({"Authorization": f"Basic {creds_bad}"}), client_ip="10.0.0.1")
+        h.check_auth()
+
+    # IP-B should still work fine
+    h2 = FakeHandler(FakeHeaders({"Authorization": f"Basic {creds_good}"}), client_ip="10.0.0.2")
+    assert h2.check_auth() is True
+
+
 # ---------------------------------------------------------
 # 2. Backend Safety Gate Tests (ai_brain.py)
-#    ai_brain calls sys.exit(1) on import when QWEN_API_KEY
-#    is missing, so we patch os.environ and sys.exit before
-#    importing.
 # ---------------------------------------------------------
 
 @pytest.fixture(scope="module")
@@ -96,9 +142,7 @@ def engine_class():
         "BINANCE_SECRET_KEY": "",
     }
     with patch.dict(os.environ, env_patch):
-        # Prevent real sys.exit if something still triggers it
         with patch.object(sys, "exit"):
-            # Force re-import to pick up patched env
             if "ai_brain" in sys.modules:
                 del sys.modules["ai_brain"]
             import ai_brain

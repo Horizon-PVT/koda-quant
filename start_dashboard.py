@@ -45,23 +45,69 @@ def binance_request(endpoint):
 
 import base64
 import time
+import threading
 
 DASHBOARD_PASS = os.environ.get("DASHBOARD_PASS", "")
 DASHBOARD_USER = os.environ.get("DASHBOARD_USER", "admin")
+
+# ── IP-based Rate Limiter (thread-safe) ──────────────────
+# Tracks failed auth attempts per IP. Locks out an IP for
+# LOCKOUT_SECONDS after MAX_FAILS within WINDOW_SECONDS.
+_rate_lock = threading.Lock()
+_fail_buckets = {}          # ip -> [timestamp, timestamp, ...]
+MAX_FAILS = 5               # max failures before lockout
+WINDOW_SECONDS = 60         # rolling window
+LOCKOUT_SECONDS = 300       # 5 min lockout after exceeding limit
+
+
+def _is_rate_limited(ip: str) -> bool:
+    """Return True if this IP should be blocked (429)."""
+    now = time.time()
+    with _rate_lock:
+        attempts = _fail_buckets.get(ip, [])
+        # Prune old entries outside the window
+        attempts = [t for t in attempts if now - t < WINDOW_SECONDS]
+        _fail_buckets[ip] = attempts
+
+        if len(attempts) >= MAX_FAILS:
+            # Check if still in lockout period from the last fail
+            if now - attempts[-1] < LOCKOUT_SECONDS:
+                return True
+            # Lockout expired — reset bucket
+            _fail_buckets[ip] = []
+    return False
+
+
+def _record_fail(ip: str):
+    """Record a failed auth attempt for this IP."""
+    with _rate_lock:
+        _fail_buckets.setdefault(ip, []).append(time.time())
+
 
 class ProxyHTTPRequestHandler(SimpleHTTPRequestHandler):
     # P1 FIX: Block sensitive files from being served
     BLOCKED_FILES = {'.env', 'trade_history.csv', 'adaptive_config.json', 
                      'macro_filter.json', 'koda_v8_upgrade.patch'}
     
+    def _client_ip(self):
+        """Get the client IP from the request."""
+        return self.client_address[0] if self.client_address else "unknown"
+
     def check_auth(self):
         if not DASHBOARD_PASS:
             print("[SECURITY WARNING] DASHBOARD_PASS is not set; refusing dashboard access (fail-closed).")
             return False
+
+        # Rate limit check BEFORE even looking at credentials
+        ip = self._client_ip()
+        if _is_rate_limited(ip):
+            return "RATE_LIMITED"
+
         auth_header = self.headers.get('Authorization')
         if auth_header is None:
             return False
         if not auth_header.startswith('Basic '):
+            _record_fail(ip)
             return False
         try:
             encoded_credentials = auth_header.split(' ')[1]
@@ -71,16 +117,23 @@ class ProxyHTTPRequestHandler(SimpleHTTPRequestHandler):
             if username == DASHBOARD_USER and password == DASHBOARD_PASS:
                 return True
             else:
-                # Anti-bruteforce delay
-                time.sleep(2)
+                _record_fail(ip)
                 return False
         except Exception:
-            time.sleep(2)
+            _record_fail(ip)
             return False
 
     def do_GET(self):
         # Enforce Basic Auth
-        if not self.check_auth():
+        auth_result = self.check_auth()
+        if auth_result == "RATE_LIMITED":
+            self.send_response(429)
+            self.send_header('Content-type', 'text/html')
+            self.send_header('Retry-After', str(LOCKOUT_SECONDS))
+            self.end_headers()
+            self.wfile.write(b"429 Too Many Requests - IP temporarily locked")
+            return
+        if not auth_result:
             self.send_response(401)
             self.send_header('WWW-Authenticate', 'Basic realm="Koda Quant Dashboard"')
             self.send_header('Content-type', 'text/html')
