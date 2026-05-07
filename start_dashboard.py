@@ -54,7 +54,8 @@ class ProxyHTTPRequestHandler(SimpleHTTPRequestHandler):
     
     def check_auth(self):
         if not DASHBOARD_PASS:
-            return True
+            print("[SECURITY WARNING] DASHBOARD_PASS is not set; refusing dashboard access (fail-closed).")
+            return False
         auth_header = self.headers.get('Authorization')
         if auth_header is None:
             return False
@@ -122,6 +123,9 @@ class ProxyHTTPRequestHandler(SimpleHTTPRequestHandler):
         super().do_GET()
 
 def bind_server(start_port: int):
+    if HOST == "0.0.0.0" and not DASHBOARD_PASS:
+        raise RuntimeError("DASHBOARD_PASS is required for public dashboard binding. Set it in .env to proceed.")
+        
     last_error = None
     for port in range(start_port, start_port + MAX_PORT_TRIES):
         try:

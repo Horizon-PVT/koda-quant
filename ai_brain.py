@@ -279,7 +279,7 @@ class OFIV5SniperEngine:
 
     def execute_binance_request(self, method, endpoint, params):
         # 2-Layer Safety Gate for LIVE orders
-        if endpoint == "/fapi/v1/order" and method == "POST":
+        if endpoint == "/fapi/v1/order" and method.upper() == "POST":
             env_live = os.environ.get("KODA_ENABLE_LIVE_TRADING", "false").lower() == "true"
             cfg_live = self.live_cfg.get("allow_live_trading", False)
             if not (env_live and cfg_live):
