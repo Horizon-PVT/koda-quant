@@ -21,11 +21,11 @@ def test_update_adaptive_rules_clamps_and_writes_config(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     rows = [
-        {"pnl": -5},
-        {"pnl": -3},
-        {"pnl": -2},
-        {"pnl": -1},
-        {"pnl": 1},
+        {"pnl": -5, "z_ofi": 2.1, "spread": 0.001, "volatility": 15.0, "price": 60000, "signal": "BUY"},
+        {"pnl": -3, "z_ofi": 2.1, "spread": 0.001, "volatility": 15.0, "price": 60000, "signal": "BUY"},
+        {"pnl": -2, "z_ofi": 2.1, "spread": 0.001, "volatility": 15.0, "price": 60000, "signal": "BUY"},
+        {"pnl": -1, "z_ofi": 2.1, "spread": 0.001, "volatility": 15.0, "price": 60000, "signal": "BUY"},
+        {"pnl": 1, "z_ofi": 2.1, "spread": 0.001, "volatility": 15.0, "price": 60000, "signal": "BUY"},
     ]
     pd.DataFrame(rows).to_csv(tmp_path / "trade_history.csv", index=False)
 

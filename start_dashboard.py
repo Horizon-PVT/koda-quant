@@ -44,8 +44,10 @@ def binance_request(endpoint):
         return {"status": "ERROR", "msg": str(e)}
 
 import base64
+import time
 
 DASHBOARD_PASS = os.environ.get("DASHBOARD_PASS", "")
+DASHBOARD_USER = os.environ.get("DASHBOARD_USER", "admin")
 
 class ProxyHTTPRequestHandler(SimpleHTTPRequestHandler):
     # P1 FIX: Block sensitive files from being served
@@ -65,8 +67,15 @@ class ProxyHTTPRequestHandler(SimpleHTTPRequestHandler):
             encoded_credentials = auth_header.split(' ')[1]
             decoded_credentials = base64.b64decode(encoded_credentials).decode('utf-8')
             username, password = decoded_credentials.split(':', 1)
-            return username == 'admin' and password == DASHBOARD_PASS
+            
+            if username == DASHBOARD_USER and password == DASHBOARD_PASS:
+                return True
+            else:
+                # Anti-bruteforce delay
+                time.sleep(2)
+                return False
         except Exception:
+            time.sleep(2)
             return False
 
     def do_GET(self):
