@@ -18,8 +18,12 @@ import websockets
 from tradingagents_adapter import MacroAgentAdapter
 from risk_manager import PortfolioRiskManager
 
-# Fix unicode print
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+# Fix unicode print carefully to not break pytest
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 
 # Load API Keys — try local .env first, then fallback to koda_quant path
 from pathlib import Path
@@ -274,6 +278,13 @@ class OFIV5SniperEngine:
         return None, "NO_EDGE"
 
     def execute_binance_request(self, method, endpoint, params):
+        # 2-Layer Safety Gate for LIVE orders
+        if endpoint == "/fapi/v1/order" and method == "POST":
+            env_live = os.environ.get("KODA_ENABLE_LIVE_TRADING", "false").lower() == "true"
+            cfg_live = self.live_cfg.get("allow_live_trading", False)
+            if not (env_live and cfg_live):
+                return {"status": "SIMULATED", "params": params, "msg": "Safety gate active: Order simulated."}
+
         if not binance_api_key or not binance_secret_key:
             return {"status": "SIMULATED", "params": params}
             
@@ -685,8 +696,12 @@ class OFIV5SniperEngine:
             print(f"[-] Failed to update realized PnL: {e}")
 
     async def run(self):
-        print("🚀 [V8] Starting Live Sniper Mode Engine with Realtime PnL & Adaptive Learning")
-        send_telegram_message("🚀 <b>KODA QUANT ENGINE LIVE</b>\nV8.5.1 System started successfully.\nMonitoring BTC/USDT Order Flow...")
+        env_live = os.environ.get("KODA_ENABLE_LIVE_TRADING", "false").lower() == "true"
+        cfg_live = self.live_cfg.get("allow_live_trading", False)
+        mode_str = "REAL-MONEY LIVE" if (env_live and cfg_live) else "SAFE/PAPER"
+        
+        print(f"🚀 [V8] Starting {mode_str} Sniper Mode Engine with Real-time PnL & Adaptive Learning")
+        send_telegram_message(f"🚀 <b>KODA QUANT ENGINE: {mode_str}</b>\nV8.5.1 System started successfully.\nMonitoring BTC/USDT Order Flow...")
         url = f"wss://fstream.binance.com/ws/{self.symbol}@depth{self.depth_levels}@100ms"
         
         while True:

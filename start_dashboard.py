@@ -21,7 +21,7 @@ load_dotenv(".env")
 BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY", "")
 BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY", "")
 
-HOST = "127.0.0.1"  # P1 FIX: Bind localhost only. Set KODA_DASHBOARD_PUBLIC=1 for LAN access.
+HOST = "0.0.0.0"  # P1 FIX: Bind to all interfaces for VPS public access.
 DEFAULT_PORT = 8001
 MAX_PORT_TRIES = 20
 

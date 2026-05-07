@@ -2,6 +2,7 @@
     "_comment": "KODA QUANT V8.2 - Live Phase A Config (Codex-verified thresholds)",
     "_phase": "A",
     "_equity": 75.05,
+    "allow_live_trading": false,
 
     "leverage": 5,
     "risk_per_trade_pct": 0.005,
