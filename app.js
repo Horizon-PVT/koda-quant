@@ -159,15 +159,31 @@ function updateDashboard(history) {
         const pnlText = pnl > 0 ? `+$${pnl.toFixed(2)}` : `$${pnl.toFixed(2)}`;
         const sideClass = trade.signal === 'BUY' ? 'green' : 'red';
         
-        tr.innerHTML = `
-            <td>${new Date(parseInt(trade.timestamp)*1000).toLocaleTimeString()}</td>
-            <td class="${sideClass}">${trade.signal}</td>
-            <td>${parseFloat(trade.price).toFixed(1)}</td>
-            <td>${parseFloat(trade.z_ofi).toFixed(2)}</td>
-            <td>${parseFloat(trade.spread).toFixed(4)}</td>
-            <td>${trade.strategy || '-'}</td>
-            <td class="${pnlClass}">${pnlText}</td>
-        `;
+        const td1 = document.createElement('td');
+        td1.textContent = new Date(parseInt(trade.timestamp)*1000).toLocaleTimeString();
+        const td2 = document.createElement('td');
+        td2.className = sideClass;
+        td2.textContent = trade.signal;
+        const td3 = document.createElement('td');
+        td3.textContent = parseFloat(trade.price).toFixed(1);
+        const td4 = document.createElement('td');
+        td4.textContent = parseFloat(trade.z_ofi).toFixed(2);
+        const td5 = document.createElement('td');
+        td5.textContent = parseFloat(trade.spread).toFixed(4);
+        const td6 = document.createElement('td');
+        td6.textContent = trade.strategy || '-';
+        const td7 = document.createElement('td');
+        td7.className = pnlClass;
+        td7.textContent = pnlText;
+        
+        tr.appendChild(td1);
+        tr.appendChild(td2);
+        tr.appendChild(td3);
+        tr.appendChild(td4);
+        tr.appendChild(td5);
+        tr.appendChild(td6);
+        tr.appendChild(td7);
+        
         tbody.appendChild(tr);
     });
     
@@ -203,13 +219,26 @@ setInterval(fetchHistory, 5000);
 function buildDomRow(bgClass, bidVol, price, askVol, width) {
     const div = document.createElement('div');
     div.className = 'dom-row ' + (bgClass === 'ask' ? 'ask' : 'bid');
-    div.innerHTML = `
-        <div class="depth-bar" style="width: ${width}%"></div>
-        <div>${bidVol}</div>
-        <div class="dom-price">${price}</div>
-        <div>${askVol}</div>
-        <div>${bgClass === 'ask' ? 'ASK' : 'BID'}</div>
-    `;
+    const bar = document.createElement('div');
+    bar.className = 'depth-bar';
+    bar.style.width = width + '%';
+    
+    const div1 = document.createElement('div');
+    div1.textContent = bidVol;
+    const div2 = document.createElement('div');
+    div2.className = 'dom-price';
+    div2.textContent = price;
+    const div3 = document.createElement('div');
+    div3.textContent = askVol;
+    const div4 = document.createElement('div');
+    div4.textContent = bgClass === 'ask' ? 'ASK' : 'BID';
+    
+    div.appendChild(bar);
+    div.appendChild(div1);
+    div.appendChild(div2);
+    div.appendChild(div3);
+    div.appendChild(div4);
+    
     return div;
 }
 
@@ -272,7 +301,18 @@ async function fetchChat() {
             if(log.c === 'exec') color = '#00d4ff';
             if(log.c === 'risk') color = '#ff3366';
             if(log.c === 'system') color = '#00ff88';
-            div.innerHTML = `<span style="color: ${color}; width: 120px; display: inline-block;">[${log.s}]</span> <span>${log.m}</span>`;
+            const span1 = document.createElement('span');
+            span1.style.color = color;
+            span1.style.width = '120px';
+            span1.style.display = 'inline-block';
+            span1.textContent = `[${log.s}]`;
+            
+            const span2 = document.createElement('span');
+            span2.textContent = log.m;
+            
+            div.appendChild(span1);
+            div.appendChild(span2);
+            
             chatBox.appendChild(div);
         });
         chatBox.scrollTop = chatBox.scrollHeight;

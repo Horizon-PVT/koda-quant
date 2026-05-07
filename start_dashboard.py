@@ -43,12 +43,41 @@ def binance_request(endpoint):
     except Exception as e:
         return {"status": "ERROR", "msg": str(e)}
 
+import base64
+
+DASHBOARD_PASS = os.environ.get("DASHBOARD_PASS", "")
+
 class ProxyHTTPRequestHandler(SimpleHTTPRequestHandler):
     # P1 FIX: Block sensitive files from being served
     BLOCKED_FILES = {'.env', 'trade_history.csv', 'adaptive_config.json', 
                      'macro_filter.json', 'koda_v8_upgrade.patch'}
     
+    def check_auth(self):
+        if not DASHBOARD_PASS:
+            return True
+        auth_header = self.headers.get('Authorization')
+        if auth_header is None:
+            return False
+        if not auth_header.startswith('Basic '):
+            return False
+        try:
+            encoded_credentials = auth_header.split(' ')[1]
+            decoded_credentials = base64.b64decode(encoded_credentials).decode('utf-8')
+            username, password = decoded_credentials.split(':', 1)
+            return username == 'admin' and password == DASHBOARD_PASS
+        except Exception:
+            return False
+
     def do_GET(self):
+        # Enforce Basic Auth
+        if not self.check_auth():
+            self.send_response(401)
+            self.send_header('WWW-Authenticate', 'Basic realm="Koda Quant Dashboard"')
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            self.wfile.write(b"401 Unauthorized")
+            return
+            
         # Block sensitive files
         requested_file = os.path.basename(self.path.split('?')[0])
         if requested_file in self.BLOCKED_FILES:
